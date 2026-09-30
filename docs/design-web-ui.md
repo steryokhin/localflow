@@ -21,8 +21,12 @@ Chosen by the user after seeing the mockups: variant **A** with one structural c
    Sync-owned `attachments/` and `raw/` are not listed as files (attachments show inside the
    ticket render).
 4. **Pane 4 — content.** Original Task renders like the mockup's ticket page (Jira mirror with
-   amber "new" highlights). A user file opens in the editor: Markdown + live preview, frontmatter
-   as a properties strip (status / priority / taken for `notes.md`).
+   amber "new" highlights). A user file opens in the editor, frontmatter as a properties strip
+   (status / priority / taken for `notes.md`).
+   **Editor = Notion-style live preview (decided 2026-09-30, replaces the split view):** one
+   page, the whole document rendered; the block the cursor is in shows its raw Markdown; leaving
+   the block renders it again. Block = Markdown block (paragraph, heading, list, code fence,
+   quote, table). Plain textarea fallback ("Source") stays available.
 5. **History instead of "Changes".** A chronological event feed per ticket, like Jira's Activity:
    "status Open → In Progress · 12 Sep", "comment by Olga · 11 Sep", "description changed", one
    after another; unread events highlighted. Source: sync commit bodies from git log; Jira's own
