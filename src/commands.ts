@@ -10,6 +10,7 @@ import { JiraClient } from "./jira/client.ts";
 import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
 import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox } from "./render/inbox.ts";
+import { renderReport } from "./report.ts";
 import { runSync } from "./sync/run.ts";
 import type { SyncOptions } from "./sync/run.ts";
 import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, slugify, today, writeFileAtomic } from "./util.ts";
@@ -217,6 +218,19 @@ export function cmdCommit(vault: string, message: string | undefined): void {
   assertLocalOnly(vault);
   const sha = commitAll(vault, message ?? `notes: ${nowStamp()}`);
   out(sha ? `Committed ${sha.slice(0, 10)}` : "Nothing to commit.");
+}
+
+export function cmdReport(vault: string, opts: { date?: string; write?: boolean }): void {
+  const date = opts.date ?? today();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new UserError(`--date must be YYYY-MM-DD (got "${date}")`);
+  const text = renderReport(vault, date);
+  if (opts.write) {
+    const file = path.join(vault, "reports", `${date}.md`);
+    writeFileAtomic(file, text);
+    out(file);
+    return;
+  }
+  process.stdout.write(text);
 }
 
 export function cmdCreate(vault: string, prefix: string, title: string, opts: { type?: string; priority?: string }): void {

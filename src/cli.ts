@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLs, cmdNote, cmdOpen, cmdPath,
-  cmdSeen, cmdStart, cmdStatus, cmdSync,
+  cmdReport, cmdSeen, cmdStart, cmdStatus, cmdSync,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
 import { UserError } from "./util.ts";
@@ -33,6 +33,11 @@ Work
   open [KEY]                      open the ticket folder (or the vault) in your editor
   path KEY                        print the ticket folder path
   commit [-m MSG]                 commit your own files (notes) to the vault's local git
+
+Reports
+  report [--date YYYY-MM-DD] [--write]
+                                  the day from the vault's git history and session log;
+                                  --write saves it to <vault>/reports/<date>.md
 `;
 
 type Opts = Record<string, { type: "string" | "boolean"; short?: string }>;
@@ -166,6 +171,15 @@ async function main(argv: string[]): Promise<number> {
         need(positionals.slice(1).join(" "), usage),
         { type: values.type as string | undefined, priority: values.priority as string | undefined },
       );
+      return 0;
+    }
+
+    case "report": {
+      const { values } = parse(rest, { date: { type: "string" }, write: { type: "boolean" } });
+      cmdReport(resolveVault(values.vault as string | undefined), {
+        date: values.date as string | undefined,
+        write: values.write as boolean | undefined,
+      });
       return 0;
     }
 

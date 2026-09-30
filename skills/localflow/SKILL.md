@@ -72,6 +72,15 @@ Quote the user's wording verbatim. Never rewrite earlier entries; only append.
 For work that has no Jira ticket: `lf create WORK "title"` (the prefix comes from
 `localflow.json`, `source: local`). Their `ticket.md` is editable.
 
+## Daily report
+
+`lf report` (today) or `lf report --date YYYY-MM-DD` prints, with no model involved: what came
+from Jira, which tickets the user moved or annotated (committed changes only), what is in progress,
+and the Claude Code sessions of the day (if the SessionEnd hook is installed). When the user asks
+for a daily summary, run it and write the narrative **from that output**, not from the raw files.
+`lf report --write` saves it to `<vault>/reports/<date>.md`. Uncommitted notes are invisible to
+the report — `lf commit` first.
+
 ## Board and search
 
 - `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.

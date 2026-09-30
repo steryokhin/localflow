@@ -37,7 +37,11 @@ else
   echo "note: neither node (>= 22.18) nor bun found on PATH — lf needs one of them" >&2
 fi
 
+chmod +x "$ROOT/hooks/session-log.sh"
 cat <<EOF
+
+Optional — session log for \`lf report\` (add to ~/.claude/settings.json, not done automatically):
+  "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "$ROOT/hooks/session-log.sh" } ] } ] }
 
 Next:
   lf init ~/LocalFlow --jira-url https://<jira-host> --project <KEY> --local-prefix WORK

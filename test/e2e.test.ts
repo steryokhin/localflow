@@ -9,6 +9,7 @@ import { after, before, test } from "node:test";
 import { cmdCommit, cmdCreate, cmdInit, cmdNote, cmdSeen, cmdStart } from "../src/commands.ts";
 import { loadConfig } from "../src/config.ts";
 import type { Config } from "../src/config.ts";
+import { renderReport } from "../src/report.ts";
 import { runSync } from "../src/sync/run.ts";
 import { loadState, unreadByTicket } from "../src/vault/state.ts";
 import { findTicket, listTickets } from "../src/vault/store.ts";
@@ -190,6 +191,23 @@ test("dry run reports without writing", async () => {
   assert.equal(findTicket(vault, "DEMO-3"), null);
   assert.equal(gitOut("rev-parse", "HEAD"), before);
   jira.issues.delete("DEMO-3");
+});
+
+test("daily report is built from git history and the session log", () => {
+  const date = new Date().toISOString().slice(0, 10);
+  fs.mkdirSync(path.join(vault, ".localflow"), { recursive: true });
+  fs.appendFileSync(
+    path.join(vault, ".localflow", "sessions.jsonl"),
+    JSON.stringify({ ts: `${date}T10:15:00`, cwd: "/Users/x/work/app", reason: "clear", messages: 12, prompt: "fix swipe" }) + "\n",
+  );
+  cmdCommit(vault, "notes: test");
+  const report = renderReport(vault, date);
+  assert.match(report, /## From Jira \(2\)/);
+  assert.match(report, /- \*\*DEMO-1\*\* Swipe approval does not work\n(    - .*\n)*    - \d\d:\d\d status Open → In Progress; description changed/);
+  assert.match(report, /## My work \(\d\)\n\n- \*\*DEMO-1\*\* .* — status inbox → inprogress; edited notes\.md, scratchpad\.md/);
+  assert.match(report, /## In progress now \(1\)\n\n- \*\*DEMO-1\*\*/);
+  assert.match(report, /## Claude Code sessions \(1\)\n\n- 10:15 · `~\/work\/app` · clear · msgs: 12 · fix swipe/);
+  assert.match(renderReport(vault, "2020-01-01"), /_No changes came from Jira._/);
 });
 
 test("sync refuses to run when the vault has a git remote", async () => {
