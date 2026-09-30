@@ -4,7 +4,7 @@ import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "../src/va
 
 test("round trip of scalars and lists", () => {
   const data = {
-    id: "EPMEDU-1",
+    id: "PROJ-1",
     title: 'Crash: "swipe" fails',
     mine: true,
     points: 3,
