@@ -33,7 +33,9 @@ vault's git repository is local and has no remote. Full command list: `lf help`.
 
 ## Getting tickets in: two transports
 
-`lf doctor` tells which one applies. Both end in the same render, diff and commit.
+`lf doctor` tells which one applies (`jira.transport` in `localflow.json`: `rest` or `import`).
+With `import`, `lf` itself never opens a network connection — only loopback is allowed — so B is
+the only way in. Both end in the same render, diff and commit.
 
 **A. REST with a token** (`lf doctor` shows "Jira access ok"):
 ```

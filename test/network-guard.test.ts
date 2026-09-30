@@ -59,6 +59,15 @@ test("client refuses a redirect that leaves the Jira host", async () => {
   await assert.rejects(client.download(`${jira.baseUrl}/redirect-out`), /only .* is allowed/);
 });
 
+test("import transport refuses any non-loopback host outright", () => {
+  assert.throws(
+    () => new JiraClient("https://example.atlassian.net", { kind: "basic", token: "t", email: "e@x" }, "test", true),
+    /opens no outbound connections/,
+  );
+  // Loopback stays allowed so the fake-Jira tests can exercise the same code path.
+  new JiraClient(jira.baseUrl, { kind: "bearer", token: TEST_TOKEN }, "test", true);
+});
+
 test("client rejects a non-https base URL for non-loopback hosts", () => {
   assert.throws(() => new JiraClient("http://jira.example.com", { kind: "bearer", token: TEST_TOKEN }, "test"), /must be https/);
 });

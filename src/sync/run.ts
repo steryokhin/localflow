@@ -56,6 +56,12 @@ function resolveQueries(config: Config, opts: SyncOptions): { queries: string[];
 export async function runSync(vault: string, config: Config, opts: SyncOptions = {}): Promise<SyncReport> {
   const say = opts.log ?? (() => {});
   assertLocalOnly(vault);
+  if (config.jira.transport === "import") {
+    throw new UserError(
+      'jira.transport is "import": lf opens no outbound connections. Fetch issues with the agent and run `lf import`, ' +
+        'or set jira.transport to "rest" to allow REST access.',
+    );
+  }
   const client = new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent);
   const warnings: string[] = [];
 

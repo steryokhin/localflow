@@ -25,6 +25,8 @@ git clone <repo> ~/work/localflow
   agent has the Atlassian (Rovo) MCP connector, the agent fetches the issues and hands the JSON
   to `lf`; rendering, diffs, history and notes are identical. The bundled skill tells the agent how.
   Attachments cannot be downloaded this way and are only listed.
+  With `jira.transport: "import"` (`lf init --import-only`) `lf` refuses every non-loopback
+  connection, so the tool itself never talks to the network at all.
 
 ## First run
 
@@ -88,6 +90,7 @@ containing `localflow.json`, then `~/LocalFlow`.
   "version": 1,
   "jira": {
     "baseUrl": "https://jira.example.com",
+    "transport": "rest",
     "flavor": "datacenter",
     "tokenFile": "~/.config/localflow/jira-token",
     "userAgent": "localflow/0.1",
@@ -121,6 +124,7 @@ containing `localflow.json`, then `~/LocalFlow`.
   Every other non-empty field is rendered under "Other fields" with its human-readable name.
 - `ignoreFields` — field names or ids that only add noise to diffs and are left out of `ticket.md`.
 - `statusOverrides` — Jira status name → initial local status for new tickets.
+- `transport` — `rest` (lf fetches from Jira itself) or `import` (no outbound network; only `lf import`).
 - `flavor` — `datacenter` (REST v2, Bearer PAT, wiki markup) or `cloud` (REST v2, Basic auth with
   `email` + API token). `textFormat` says how plain-string rich text is read: `wiki` for REST,
   `markdown` for Rovo output; ADF objects are recognised either way.

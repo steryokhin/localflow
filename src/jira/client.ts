@@ -2,7 +2,8 @@
 // Guarantees:
 //   - GET requests only: there is no code path that writes to Jira;
 //   - every request, including each redirect hop, must target the configured Jira origin;
-//   - plain http is accepted for loopback only (tests).
+//   - plain http is accepted for loopback only (tests);
+//   - with `loopbackOnly` (transport "import") no connection ever leaves the machine.
 
 import { UserError } from "../util.ts";
 
@@ -24,12 +25,17 @@ export interface JiraAuth {
   email?: string;
 }
 
+export function isLoopback(hostname: string): boolean {
+  return LOOPBACK_HOSTS.has(hostname);
+}
+
 export class JiraClient {
   readonly origin: URL;
   readonly #authorization: string;
   readonly #userAgent: string;
+  readonly #loopbackOnly: boolean;
 
-  constructor(baseUrl: string, auth: JiraAuth, userAgent: string) {
+  constructor(baseUrl: string, auth: JiraAuth, userAgent: string, loopbackOnly = false) {
     let origin: URL;
     try {
       origin = new URL(baseUrl);
@@ -38,6 +44,13 @@ export class JiraClient {
     }
     if (origin.protocol !== "https:" && !(origin.protocol === "http:" && LOOPBACK_HOSTS.has(origin.hostname))) {
       throw new UserError(`jira.baseUrl must be https (got ${baseUrl})`);
+    }
+    this.#loopbackOnly = loopbackOnly;
+    if (loopbackOnly && !isLoopback(origin.hostname)) {
+      throw new UserError(
+        `jira.transport is "import": lf opens no outbound connections (${origin.host} refused). ` +
+          `Use \`lf import\`, or set jira.transport to "rest" to allow REST access.`,
+      );
     }
     this.origin = origin;
     if (auth.kind === "basic") {
@@ -50,6 +63,9 @@ export class JiraClient {
   }
 
   #assertAllowed(url: URL): void {
+    if (this.#loopbackOnly && !isLoopback(url.hostname)) {
+      throw new Error(`Refusing request to ${url.origin}: transport is "import", loopback only`);
+    }
     if (url.protocol !== this.origin.protocol || url.host !== this.origin.host) {
       throw new Error(`Refusing request to ${url.origin}: only ${this.origin.origin} is allowed`);
     }

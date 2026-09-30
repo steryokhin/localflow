@@ -24,7 +24,7 @@ const out = (line = ""): void => console.log(line);
 
 export function cmdInit(
   target: string | undefined,
-  opts: { jiraUrl?: string; project?: string; localPrefix?: string; force?: boolean; cloud?: boolean },
+  opts: { jiraUrl?: string; project?: string; localPrefix?: string; force?: boolean; cloud?: boolean; importOnly?: boolean },
 ): void {
   const vault = path.resolve(expandHome(target ?? DEFAULT_VAULT));
   const cloud = cloudSyncedMarker(vault);
@@ -70,6 +70,10 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   const projects = Object.entries(config.projects).map(([name, p]) => `${name} (${p.source})`);
   check(projects.length > 0, "projects", projects.join(", "));
   check(true, "Jira flavor", `${config.jira.flavor}, rich text as ${config.jira.textFormat}`);
+  if (config.jira.transport === "import") {
+    check(true, "network", "loopback only — lf opens no outbound connections; tickets arrive via `lf import`");
+    return failed ? 1 : 0;
+  }
   let token = "";
   try {
     token = readToken(config);
@@ -79,7 +83,7 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   }
   if (token && !opts.offline) {
     try {
-      const me = await getMyself(new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent));
+      const me = await getMyself(new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent, false));
       check(true, "Jira access", `${config.jira.baseUrl} as ${me.displayName} (${me.key || me.accountId || me.name})`);
     } catch (e) {
       check(false, "Jira access", (e as Error).message);

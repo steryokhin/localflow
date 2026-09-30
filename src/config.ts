@@ -30,6 +30,11 @@ export interface Config {
   version: number;
   jira: {
     baseUrl: string;
+    /**
+     * "rest": lf talks to Jira itself (needs a token). "import": lf never opens an outbound
+     * connection — every non-loopback request is refused; issues arrive through `lf import`.
+     */
+    transport: "rest" | "import";
     /** "datacenter": REST v2, Bearer PAT, wiki markup. "cloud": REST v2, Basic auth (email + API token). */
     flavor: "datacenter" | "cloud";
     /** Cloud only: the account email paired with the API token. */
@@ -54,7 +59,7 @@ export interface Config {
 
 export const DEFAULT_IGNORE_FIELDS = ["Rank", "Development", "Last Viewed"];
 
-export function defaultConfig(opts: { jiraUrl?: string; project?: string; localPrefix?: string; cloud?: boolean }): Config {
+export function defaultConfig(opts: { jiraUrl?: string; project?: string; localPrefix?: string; cloud?: boolean; importOnly?: boolean }): Config {
   const projects: Record<string, ProjectConfig> = {};
   const jiraProject = opts.project ?? "PROJ";
   projects[jiraProject] = {
@@ -72,6 +77,7 @@ export function defaultConfig(opts: { jiraUrl?: string; project?: string; localP
     version: 1,
     jira: {
       baseUrl: opts.jiraUrl ?? "https://jira.example.com",
+      transport: opts.importOnly ? "import" : "rest",
       flavor: opts.cloud ? "cloud" : "datacenter",
       ...(opts.cloud ? { email: "you@example.com" } : {}),
       tokenFile: "~/.config/localflow/jira-token",
@@ -107,6 +113,7 @@ export function loadConfig(vault: string): Config {
   parsed.jira.maxAttachmentMb ??= 25;
   parsed.jira.ignoreFields ??= [...DEFAULT_IGNORE_FIELDS];
   parsed.jira.flavor ??= "datacenter";
+  parsed.jira.transport ??= "rest";
   parsed.jira.fieldNames ??= {};
   parsed.jira.textFormat ??= parsed.jira.flavor === "cloud" ? "markdown" : "wiki";
   return parsed;

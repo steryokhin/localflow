@@ -11,8 +11,9 @@ const HELP = `Local Flow — local-only Jira mirror with your own notes (sync is
 Usage: lf <command> [options]          (global: --vault PATH, or LOCALFLOW_VAULT)
 
 Setup
-  init [PATH] [--jira-url URL] [--project KEY] [--local-prefix WORK] [--cloud]
-                                  create a vault (default ~/LocalFlow); --cloud for Jira Cloud
+  init [PATH] [--jira-url URL] [--project KEY] [--local-prefix WORK] [--cloud] [--import-only]
+                                  create a vault (default ~/LocalFlow); --cloud for Jira Cloud,
+                                  --import-only: no outbound network, tickets come via "lf import"
   doctor [--offline]              check runtime, vault, token and Jira access
 
 Sync
@@ -55,6 +56,11 @@ function need(value: string | undefined, usage: string): string {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `lf --vault PATH <command>` is the same as `lf <command> --vault PATH`.
+  if (argv[0] === "--vault" && argv[1]) {
+    process.env.LOCALFLOW_VAULT = argv[1];
+    argv = argv.slice(2);
+  }
   const [command, ...rest] = argv;
   switch (command) {
     case undefined:
@@ -71,6 +77,7 @@ async function main(argv: string[]): Promise<number> {
         "local-prefix": { type: "string" },
         force: { type: "boolean" },
         cloud: { type: "boolean" },
+        "import-only": { type: "boolean" },
       });
       cmdInit(positionals[0] ?? (values.vault as string | undefined), {
         jiraUrl: values["jira-url"] as string | undefined,
@@ -78,6 +85,7 @@ async function main(argv: string[]): Promise<number> {
         localPrefix: values["local-prefix"] as string | undefined,
         force: values.force as boolean | undefined,
         cloud: values.cloud as boolean | undefined,
+        importOnly: values["import-only"] as boolean | undefined,
       });
       return 0;
     }
