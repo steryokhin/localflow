@@ -1,82 +1,84 @@
 ---
 name: imacdev-localflow
-description: Работа с тикетами через Local Flow (`lf`) — локальное зеркало Jira с личными заметками на рабочем компе. Использовать когда Сергей упоминает тикет по ключу (например PROJ-123), говорит "что нового в жире", "синкни жиру", "покажи тикет", "поехали PROJ-123", "заметка к тикету", "lf", "local flow", или когда задача ссылается на Jira-тикет.
+description: Working with tickets through Local Flow (`lf`) — a local-only Jira mirror with personal notes. Use when the user mentions a ticket by key (e.g. PROJ-123), asks "what's new in Jira", "sync Jira", "show the ticket", "let's start PROJ-123", "add a note to the ticket", says "lf" or "local flow", or when a task refers to a Jira ticket. Russian triggers work too ("что нового в жире", "синкни жиру", "поехали PROJ-123").
 ---
 
-# Local Flow — правила работы с тикетами
+# Local Flow — rules for working with tickets
 
-`lf` — CLI (`~/work/localflow/bin/lf`). Хранилище — локальная папка (по умолчанию `~/LocalFlow`,
-иначе `LOCALFLOW_VAULT` или `--vault`). Всё лежит в файлах, git хранилища локальный, без remote.
-Полный список команд: `lf help`.
+`lf` is a CLI (`~/work/localflow/bin/lf`, installed as `~/.local/bin/lf`). The vault is a plain local
+folder (default `~/LocalFlow`; otherwise `LOCALFLOW_VAULT` or `--vault`). Everything is files; the
+vault's git repository is local and has no remote. Full command list: `lf help`.
 
-## Главное
+## Essentials
 
-1. **Синк только Jira → локально.** `lf` ничего не пишет в Jira. Если нужно изменить что-то в Jira
-   (статус, комментарий, назначение) — делай это инструментами Jira, которые есть в этой среде,
-   или проси Сергея сделать в UI; потом `lf sync`, чтобы зеркало обновилось.
-2. **Ничего не покидает машину.** Содержимое тикетов, вложения, заметки не отправлять во внешние
-   сервисы: никаких Artifacts, gist, вставок в веб-формы. Отчёты — в терминал и в файлы хранилища.
-3. **Папка тикета** `projects/<PREFIX>/<KEY>-slug/`:
-   - `ticket.md`, `attachments/`, `raw/` — принадлежат синку. **Не редактировать.**
-   - `notes.md` — статус и основная заметка Сергея. Правится руками и тобой.
-   - любые другие `*.md`, диаграммы, скрипты — твои и Сергея; синк их не трогает.
-4. **Путь к тикету:** `lf path KEY`. Дальше — обычные Read/Write/Edit по файлам, не `cat`.
+1. **Sync is one-way: Jira → local.** `lf` never writes to Jira. To change something in Jira (status,
+   comment, assignee) use the Jira tools available in this environment or ask the user to do it in
+   the Jira UI, then run `lf sync` so the mirror catches up.
+2. **Nothing leaves the machine.** Ticket content, attachments and notes must not be sent to external
+   services: no Artifacts, gists, web forms or pasted excerpts. Reports go to the terminal and to files
+   inside the vault.
+3. **Ticket folder** `projects/<PREFIX>/<KEY>-slug/`:
+   - `ticket.md`, `attachments/`, `raw/` — owned by the sync. **Never edit them.**
+   - `notes.md` — the user's status and main note. Edited by the user and by you.
+   - any other `*.md`, diagrams, scripts — yours and the user's; the sync never touches them.
+4. **Path to a ticket:** `lf path KEY`. From there use Read/Write/Edit on the files, not `cat`.
 
-## Как читать тикет
+## Reading a ticket
 
-- `ticket.md` — описание, критерии приёмки, шаги, все поля, связи, вложения, комментарии.
-  Ссылки на картинки относительные (`attachments/…`) — Read их открывает как изображения.
-- `raw/issue.json` — сырой ответ Jira, если нужно поле, которого нет в `ticket.md`.
-- `notes.md` — что уже решено и сделано; читать **до** того, как что-то предлагать.
-- История: `lf diff KEY` (с последней отметки «прочитано»), `git -C <vault> log -p -- <папка>/ticket.md`.
+- `ticket.md` — description, acceptance criteria, steps, all fields, related issues, attachments,
+  comments. Image links are relative (`attachments/…`); Read opens them as images.
+- `raw/issue.json` — the raw Jira response, for a field that is not in `ticket.md`.
+- `notes.md` — what has already been decided and done. Read it **before** proposing anything.
+- History: `lf diff KEY` (since the last "seen" mark), `git -C <vault> log -p -- <folder>/ticket.md`.
 
-## Что нового
+## What's new
 
-В начале сессии по тикетам (если есть VPN к Jira):
+At the start of a ticket session (when Jira is reachable, usually over VPN):
 ```
-lf sync            # один коммит на синк со сводкой изменений
-lf inbox           # тикеты, изменившиеся с прошлого просмотра
+lf sync            # one commit per sync, with a change summary
+lf inbox           # tickets changed since the user last looked
 ```
-Кратко доложи Сергею, что изменилось (`lf inbox` уже даёт сводку: новые комментарии, смена
-статуса, правки описания, вложения). Отметку «прочитано» ставь только после доклада:
-`lf seen KEY` или `lf seen --all`. Пустой inbox — тоже результат: «ничего нового».
+Report briefly what changed (`lf inbox` already summarizes: new comments, status changes, edited
+descriptions, attachments). Mark as read only after reporting: `lf seen KEY` or `lf seen --all`.
+An empty inbox is a valid result: say "nothing new".
 
-## Флоу задачи
+## Task flow
 
-| Момент | Действие |
+| Moment | Action |
 |---|---|
-| «Поехали KEY» | `lf start KEY` (status → inprogress, `taken:` дата) и feature-ветка в репозитории кода, названная по ключу тикета в нижнем регистре (`proj-123-short-slug`) |
-| По ходу работы | Всё решённое дописывать в `notes.md` **сразу**, с датой: решения, что сделано (хеш коммита), открытые вопросы. `notes.md` — источник правды между сессиями и после `/clear` |
-| Много материала | Отдельные файлы через `lf note KEY <name>` (scratchpad, review-findings, plan) с frontmatter `ticket: KEY` |
-| PR открыт | `lf status KEY inreview` |
-| Смержено | `lf status KEY done` — только по слову Сергея |
-| Конец сессии | `lf commit` — заметки в локальный git хранилища |
+| "Let's start KEY" | `lf start KEY` (status → inprogress, sets `taken:`) and a feature branch in the code repository named after the ticket key in lower case (`proj-123-short-slug`) |
+| While working | Write every decision into `notes.md` **as you go**, dated: decisions, what was done (commit hash), open questions. `notes.md` is the source of truth between sessions and after `/clear` |
+| Lots of material | Separate files via `lf note KEY <name>` (scratchpad, review-findings, plan) with frontmatter `ticket: KEY` |
+| PR opened | `lf status KEY inreview` |
+| Merged | `lf status KEY done` — only when the user says so |
+| End of session | `lf commit` — notes go into the vault's local git |
 
-Статус в `notes.md` — Сергея, синк его не двигает. Если Jira ушла дальше (например, тикет закрыт),
-`lf ls` покажет `[Jira is ahead: done]` — скажи об этом, статус меняет Сергей.
+The status in `notes.md` belongs to the user; the sync never moves it. When Jira is further along
+(e.g. the ticket was closed), `lf ls` shows `[Jira is ahead: done]` — mention it; the user changes
+the status.
 
-## Формат заметок в notes.md
+## Note format in notes.md
 
 ```markdown
 ## 2026-09-30
-- Решение: … (Сергей)
-- Сделано: … — коммит `abc1234`, ветка `proj-123-…`
-- Открыто: …
+- Decision: … (user)
+- Done: … — commit `abc1234`, branch `proj-123-…`
+- Open: …
 ```
-Формулировки Сергея — дословно. Не переписывать старые записи, только дописывать.
+Quote the user's wording verbatim. Never rewrite earlier entries; only append.
 
-## Свои тикеты
+## Local tickets
 
-Локальные тикеты для работы, которой нет в Jira: `lf create WORK "название"` (префикс — из
-`localflow.json`, `source: local`). У них `ticket.md` редактируемый.
+For work that has no Jira ticket: `lf create WORK "title"` (the prefix comes from
+`localflow.json`, `source: local`). Their `ticket.md` is editable.
 
-## Доска и поиск
+## Board and search
 
-- `lf ls` — открытые по статусам; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.
-- Поиск по тексту — Grep по `projects/**/ticket.md` и `notes.md`; векторного поиска нет намеренно.
+- `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.
+- Text search — Grep over `projects/**/ticket.md` and `notes.md`. There is deliberately no vector search.
 
-## Если что-то не так
+## When something is off
 
-- `lf doctor` — окружение, токен, доступ к Jira. Нет VPN — синк невозможен, работай с тем, что есть.
-- Шумное поле в diff — добавить его имя в `jira.ignoreFields` в `localflow.json`.
-- Никогда не добавлять remote к git хранилища и не запускать там `git push`.
+- `lf doctor` — environment, token, Jira access. No VPN means no sync; work with what is there.
+- A noisy field in the diff — add its name to `jira.ignoreFields` in `localflow.json`.
+- Never add a remote to the vault's git and never run `git push` there.
