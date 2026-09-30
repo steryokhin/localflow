@@ -17,11 +17,20 @@ git clone <repo> ~/work/localflow
 ~/work/localflow/install.sh      # symlinks ~/.local/bin/lf and ~/.claude/skills/localflow
 ```
 
+## Two ways to get tickets in
+
+- **REST with a token** — `lf sync`. Autonomous: cron, hooks, no model, no tokens spent.
+  Data Center: Personal Access Token (Bearer). Cloud: API token + `jira.email` (Basic auth).
+- **Through an AI agent** — `lf import FILE.json`. When an API token is not an option but the
+  agent has the Atlassian (Rovo) MCP connector, the agent fetches the issues and hands the JSON
+  to `lf`; rendering, diffs, history and notes are identical. The bundled skill tells the agent how.
+  Attachments cannot be downloaded this way and are only listed.
+
 ## First run
 
 ```bash
-lf init ~/LocalFlow --jira-url https://jira.example.com --project PROJ --local-prefix WORK
-# a read-only Personal Access Token from Jira:
+lf init ~/LocalFlow --jira-url https://jira.example.com --project PROJ --local-prefix WORK   # add --cloud for Jira Cloud
+# a read-only token (Data Center: Personal Access Token; Cloud: API token from id.atlassian.com):
 mkdir -p ~/.config/localflow
 printf '%s' 'TOKEN' > ~/.config/localflow/jira-token && chmod 600 ~/.config/localflow/jira-token
 lf doctor
@@ -56,6 +65,7 @@ sync; when Jira has moved further than your status, `lf ls` points it out.
 | Command | What it does |
 |---|---|
 | `lf sync [--project P] [--preset N] [--jql "…"] [--key K1,K2] [--dry-run] [--force]` | pull changes from Jira; one commit per sync |
+| `lf import FILE.json… [--dry-run] [--force]` | the same, from issue JSON fetched by an agent; `-` reads stdin |
 | `lf inbox` | tickets changed since you last looked, with a summary |
 | `lf diff KEY [git diff options]` | what exactly changed in a ticket |
 | `lf seen KEY… \| --all` | mark as read |
@@ -78,10 +88,13 @@ containing `localflow.json`, then `~/LocalFlow`.
   "version": 1,
   "jira": {
     "baseUrl": "https://jira.example.com",
+    "flavor": "datacenter",
     "tokenFile": "~/.config/localflow/jira-token",
     "userAgent": "localflow/0.1",
     "maxAttachmentMb": 25,
-    "ignoreFields": ["Rank", "Development", "Last Viewed"]
+    "ignoreFields": ["Rank", "Development", "Last Viewed"],
+    "fieldNames": {},
+    "textFormat": "wiki"
   },
   "projects": {
     "PROJ": {
@@ -108,8 +121,11 @@ containing `localflow.json`, then `~/LocalFlow`.
   Every other non-empty field is rendered under "Other fields" with its human-readable name.
 - `ignoreFields` — field names or ids that only add noise to diffs and are left out of `ticket.md`.
 - `statusOverrides` — Jira status name → initial local status for new tickets.
-
-Written for Jira Data Center (REST API v2, Bearer token auth).
+- `flavor` — `datacenter` (REST v2, Bearer PAT, wiki markup) or `cloud` (REST v2, Basic auth with
+  `email` + API token). `textFormat` says how plain-string rich text is read: `wiki` for REST,
+  `markdown` for Rovo output; ADF objects are recognised either way.
+- `me` — for imported data: your accountId, email or display name, so `mine` can be computed.
+- `fieldNames` — `customfield_*` → human name, for imported data that carries no field names.
 
 ## Daily report and session log
 

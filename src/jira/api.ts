@@ -12,17 +12,31 @@ export interface SearchResult {
   names: Record<string, string>;
 }
 
+/** Data Center users have key/name; Cloud users have accountId/emailAddress. Empty strings never match. */
 export interface JiraUser {
   key: string;
   name: string;
   displayName: string;
+  accountId: string;
+  emailAddress: string;
 }
 
 const API = "/rest/api/2";
 
 export async function getMyself(client: JiraClient): Promise<JiraUser> {
   const me = await client.getJson(`${API}/myself`);
-  return { key: me.key ?? "", name: me.name ?? "", displayName: me.displayName ?? "" };
+  return {
+    key: me.key ?? "",
+    name: me.name ?? "",
+    displayName: me.displayName ?? "",
+    accountId: me.accountId ?? "",
+    emailAddress: me.emailAddress ?? "",
+  };
+}
+
+/** A user identity from a single configured string, for imported data. */
+export function userFromString(me: string): JiraUser {
+  return { key: me, name: me, displayName: me, accountId: me, emailAddress: me };
 }
 
 export async function searchIssues(client: JiraClient, jql: string, pageSize = 50): Promise<SearchResult> {

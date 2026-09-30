@@ -7,7 +7,8 @@ import type { ProjectConfig } from "../config.ts";
 import type { AttachmentPlan } from "../jira/attachments.ts";
 import { ATTACHMENTS_DIR, attachmentResolver } from "../jira/attachments.ts";
 import { collectIssueLinks, extractSprint, formatDuration, mapPriority, relationKey } from "../jira/mapping.ts";
-import { wikiToMarkdown } from "../jira/wiki.ts";
+import { richTextToMarkdown } from "../jira/richtext.ts";
+import type { TextFlavor } from "../jira/richtext.ts";
 import { dumpFrontmatter } from "../vault/frontmatter.ts";
 import type { Frontmatter } from "../vault/frontmatter.ts";
 import { formatBytes } from "../util.ts";
@@ -20,6 +21,8 @@ export interface RenderContext {
   me: JiraUser | null;
   ignoreFields: string[];
   attachments: AttachmentPlan[];
+  /** How plain-string rich text is read: wiki markup (Data Center) or Markdown (Rovo output). */
+  textFormat: TextFlavor;
 }
 
 /** Fields rendered explicitly elsewhere in the document. */
@@ -44,7 +47,14 @@ export function issueUrl(baseUrl: string, key: string): string {
 export function isMine(issue: JiraIssue, me: JiraUser | null): boolean {
   const a = issue.fields.assignee;
   if (!a || !me) return false;
-  return (!!me.key && a.key === me.key) || (!!me.name && a.name === me.name);
+  const same = (mine: string, theirs: unknown): boolean => !!mine && typeof theirs === "string" && theirs === mine;
+  return (
+    same(me.accountId, a.accountId) ||
+    same(me.emailAddress, a.emailAddress) ||
+    same(me.key, a.key) ||
+    same(me.name, a.name) ||
+    same(me.displayName, a.displayName)
+  );
 }
 
 function shortDate(iso: string | null | undefined): string {
@@ -122,6 +132,7 @@ export function formatFieldValue(value: unknown): string | null {
   }
   if (typeof value === "object") {
     const o = value as Record<string, any>;
+    if (o.type === "doc") return "\n" + JSON.stringify(value); // ADF: rendered as a block by the caller
     const label = o.displayName ?? o.value ?? o.name ?? o.key;
     if (label === undefined || label === null) return JSON.stringify(value);
     const child = o.child ? formatFieldValue(o.child) : null;
@@ -152,7 +163,7 @@ export function renderTicket(issue: JiraIssue, ctx: RenderContext): string {
   const ids = ctx.project?.fields ?? {};
   const resolve = attachmentResolver(ctx.attachments);
   const wiki = (text: unknown): string =>
-    typeof text === "string" ? wikiToMarkdown(text, { resolveAttachment: resolve, headingShift: 2 }) : "";
+    richTextToMarkdown(text, { flavor: ctx.textFormat, resolveAttachment: resolve, headingShift: 2 });
   const link = (key: string): string => `[${key}](${issueUrl(ctx.baseUrl, key)})`;
 
   const fm = buildFrontmatter(issue, ctx);
@@ -178,7 +189,8 @@ export function renderTicket(issue: JiraIssue, ctx: RenderContext): string {
   if (others.length) {
     parts.push("## Other fields", "");
     for (const [name, text] of others) {
-      if (text.includes("\n")) parts.push(`**${name}:**`, "", wiki(text), "");
+      if (text.startsWith("\n{")) parts.push(`**${name}:**`, "", wiki(JSON.parse(text.slice(1))), "");
+      else if (text.includes("\n")) parts.push(`**${name}:**`, "", wiki(text), "");
       else parts.push(`- **${name}:** ${text}`);
     }
     parts.push("");

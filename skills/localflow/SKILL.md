@@ -31,11 +31,34 @@ vault's git repository is local and has no remote. Full command list: `lf help`.
 - `notes.md` — what has already been decided and done. Read it **before** proposing anything.
 - History: `lf diff KEY` (since the last "seen" mark), `git -C <vault> log -p -- <folder>/ticket.md`.
 
-## What's new
+## Getting tickets in: two transports
 
-At the start of a ticket session (when Jira is reachable, usually over VPN):
+`lf doctor` tells which one applies. Both end in the same render, diff and commit.
+
+**A. REST with a token** (`lf doctor` shows "Jira access ok"):
 ```
 lf sync            # one commit per sync, with a change summary
+```
+
+**B. Through the Atlassian (Rovo) MCP connector**, when there is no API token but the connector
+is available to you. You fetch, `lf` does the rest:
+1. `getAccessibleAtlassianResources()` → your own `cloudId` (never hard-code someone else's).
+2. One ticket: `getJiraIssue({ cloudId, issueIdOrKey: "KEY-123", fields: ["*all", "comment"], responseContentFormat: "markdown" })`.
+   Many: `searchJiraIssuesUsingJql({ cloudId, jql, fields: ["*all", "comment"], responseContentFormat: "markdown", maxResults: 50 })`,
+   following `nextPageToken` until it is empty.
+3. Save the issue objects exactly as returned (one object, an array, or the whole `{issues: [...]}`
+   response) to a file outside the vault, e.g. `/tmp/lf-import.json`, and run `lf import /tmp/lf-import.json`.
+   `--dry-run` previews. Attachments cannot be downloaded this way; they are listed in `ticket.md`.
+4. First time only: `localflow.json` needs `jira.me` (your accountId or display name) and, for
+   readable "Other fields", `jira.fieldNames` mapping `customfield_*` ids to names — take both
+   from the first `*all` response and tell the user what you set.
+
+Never write anything to Jira through the connector as part of a sync; the mirror is read-only.
+
+## What's new
+
+After a sync or import:
+```
 lf inbox           # tickets changed since the user last looked
 ```
 Report briefly what changed (`lf inbox` already summarizes: new comments, status changes, edited
@@ -88,6 +111,6 @@ the report — `lf commit` first.
 
 ## When something is off
 
-- `lf doctor` — environment, token, Jira access. No VPN means no sync; work with what is there.
+- `lf doctor` — environment, token, Jira access. No token and no connector means no sync; work with what is there.
 - A noisy field in the diff — add its name to `jira.ignoreFields` in `localflow.json`.
 - Never add a remote to the vault's git and never run `git push` there.

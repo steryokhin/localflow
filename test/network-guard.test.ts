@@ -50,15 +50,15 @@ before(async () => {
 after(() => jira.stop());
 
 test("client refuses hosts other than the configured Jira", async () => {
-  const client = new JiraClient(jira.baseUrl, TEST_TOKEN, "test");
+  const client = new JiraClient(jira.baseUrl, { kind: "bearer", token: TEST_TOKEN }, "test");
   await assert.rejects(client.download("https://example.invalid/file.png"), /only .* is allowed/);
 });
 
 test("client refuses a redirect that leaves the Jira host", async () => {
-  const client = new JiraClient(jira.baseUrl, TEST_TOKEN, "test");
+  const client = new JiraClient(jira.baseUrl, { kind: "bearer", token: TEST_TOKEN }, "test");
   await assert.rejects(client.download(`${jira.baseUrl}/redirect-out`), /only .* is allowed/);
 });
 
 test("client rejects a non-https base URL for non-loopback hosts", () => {
-  assert.throws(() => new JiraClient("http://jira.example.com", TEST_TOKEN, "test"), /must be https/);
+  assert.throws(() => new JiraClient("http://jira.example.com", { kind: "bearer", token: TEST_TOKEN }, "test"), /must be https/);
 });

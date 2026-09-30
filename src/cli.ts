@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLs, cmdNote, cmdOpen, cmdPath,
-  cmdReport, cmdSeen, cmdStart, cmdStatus, cmdSync,
+  cmdImport, cmdReport, cmdSeen, cmdStart, cmdStatus, cmdSync,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
 import { UserError } from "./util.ts";
@@ -11,13 +11,16 @@ const HELP = `Local Flow — local-only Jira mirror with your own notes (sync is
 Usage: lf <command> [options]          (global: --vault PATH, or LOCALFLOW_VAULT)
 
 Setup
-  init [PATH] [--jira-url URL] [--project KEY] [--local-prefix WORK]
-                                  create a vault (default ~/LocalFlow)
+  init [PATH] [--jira-url URL] [--project KEY] [--local-prefix WORK] [--cloud]
+                                  create a vault (default ~/LocalFlow); --cloud for Jira Cloud
   doctor [--offline]              check runtime, vault, token and Jira access
 
 Sync
   sync [--project P] [--preset NAME] [--jql "..."] [--key K1,K2]
        [--dry-run] [--force] [--no-refresh]
+                                  pull from Jira over REST (needs a token)
+  import FILE.json... [--dry-run] [--force]
+                                  same, from issue JSON an agent fetched (e.g. via Rovo); "-" reads stdin
 
 What is new
   inbox                           tickets changed since you last looked
@@ -67,14 +70,24 @@ async function main(argv: string[]): Promise<number> {
         project: { type: "string" },
         "local-prefix": { type: "string" },
         force: { type: "boolean" },
+        cloud: { type: "boolean" },
       });
       cmdInit(positionals[0] ?? (values.vault as string | undefined), {
         jiraUrl: values["jira-url"] as string | undefined,
         project: values.project as string | undefined,
         localPrefix: values["local-prefix"] as string | undefined,
         force: values.force as boolean | undefined,
+        cloud: values.cloud as boolean | undefined,
       });
       return 0;
+    }
+
+    case "import": {
+      const { values, positionals } = parse(rest, { "dry-run": { type: "boolean" }, force: { type: "boolean" } });
+      return cmdImport(resolveVault(values.vault as string | undefined), positionals, {
+        dryRun: values["dry-run"] as boolean | undefined,
+        force: values.force as boolean | undefined,
+      });
     }
 
     case "doctor": {

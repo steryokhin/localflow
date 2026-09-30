@@ -11,8 +11,9 @@ import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
 import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox } from "./render/inbox.ts";
 import { renderReport } from "./report.ts";
-import { runSync } from "./sync/run.ts";
-import type { SyncOptions } from "./sync/run.ts";
+import { runImport } from "./sync/import.ts";
+import { jiraAuth, runSync } from "./sync/run.ts";
+import type { SyncOptions, SyncReport } from "./sync/run.ts";
 import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, slugify, today, writeFileAtomic } from "./util.ts";
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
@@ -23,7 +24,7 @@ const out = (line = ""): void => console.log(line);
 
 export function cmdInit(
   target: string | undefined,
-  opts: { jiraUrl?: string; project?: string; localPrefix?: string; force?: boolean },
+  opts: { jiraUrl?: string; project?: string; localPrefix?: string; force?: boolean; cloud?: boolean },
 ): void {
   const vault = path.resolve(expandHome(target ?? DEFAULT_VAULT));
   const cloud = cloudSyncedMarker(vault);
@@ -68,6 +69,7 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   const config = loadConfig(vault);
   const projects = Object.entries(config.projects).map(([name, p]) => `${name} (${p.source})`);
   check(projects.length > 0, "projects", projects.join(", "));
+  check(true, "Jira flavor", `${config.jira.flavor}, rich text as ${config.jira.textFormat}`);
   let token = "";
   try {
     token = readToken(config);
@@ -77,8 +79,8 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   }
   if (token && !opts.offline) {
     try {
-      const me = await getMyself(new JiraClient(config.jira.baseUrl, token, config.jira.userAgent));
-      check(true, "Jira access", `${config.jira.baseUrl} as ${me.displayName} (${me.key || me.name})`);
+      const me = await getMyself(new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent));
+      check(true, "Jira access", `${config.jira.baseUrl} as ${me.displayName} (${me.key || me.accountId || me.name})`);
     } catch (e) {
       check(false, "Jira access", (e as Error).message);
     }
@@ -89,14 +91,25 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
 export async function cmdSync(vault: string, opts: SyncOptions): Promise<number> {
   const config = loadConfig(vault);
   const report = await runSync(vault, config, { ...opts, log: out });
+  printReport(vault, report, !!opts.dryRun);
+  return 0;
+}
+
+export async function cmdImport(vault: string, files: string[], opts: { dryRun?: boolean; force?: boolean }): Promise<number> {
+  const config = loadConfig(vault);
+  const report = await runImport(vault, config, files, { ...opts, log: out });
+  printReport(vault, report, !!opts.dryRun);
+  return 0;
+}
+
+function printReport(vault: string, report: SyncReport, dryRun: boolean): void {
   const by = (kind: string) => report.actions.filter((a) => a.kind === kind);
   out();
-  out(opts.dryRun ? "DRY RUN — nothing was written" : `Vault: ${vault}`);
+  out(dryRun ? "DRY RUN — nothing was written" : `Vault: ${vault}`);
   out(`new ${by("create").length} · updated ${by("update").length} · re-rendered ${by("rerender").length} · unchanged ${by("skip").length}`);
   for (const a of [...by("create"), ...by("update")]) out(`  ${a.key}: ${a.events.join("; ")}`);
   for (const w of report.warnings) out(`  WARN ${w}`);
   if (report.commit) out(`Commit: ${report.commit.slice(0, 10)}  (see \`lf inbox\`, \`lf diff KEY\`)`);
-  return 0;
 }
 
 export function cmdInbox(vault: string): void {

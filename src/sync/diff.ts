@@ -5,6 +5,7 @@ import type { JiraIssue } from "../jira/api.ts";
 import type { RenderContext } from "../render/ticket.ts";
 import { otherFields } from "../render/ticket.ts";
 import { collectIssueLinks, extractSprint } from "../jira/mapping.ts";
+import { richTextSignature } from "../jira/richtext.ts";
 
 function label(obj: any): string {
   return obj?.displayName ?? obj?.name ?? "none";
@@ -15,7 +16,7 @@ function names(list: any[] | undefined): string {
 }
 
 function text(v: unknown): string {
-  return typeof v === "string" ? v.replace(/\r\n?/g, "\n").trim() : "";
+  return richTextSignature(v);
 }
 
 export function summarizeChanges(oldIssue: JiraIssue, newIssue: JiraIssue, ctx: RenderContext): string[] {

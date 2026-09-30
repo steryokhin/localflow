@@ -17,12 +17,19 @@ export class JiraHttpError extends Error {
   }
 }
 
+export interface JiraAuth {
+  /** Data Center: Personal Access Token as a Bearer token. Cloud: email + API token as Basic auth. */
+  kind: "bearer" | "basic";
+  token: string;
+  email?: string;
+}
+
 export class JiraClient {
   readonly origin: URL;
-  readonly #token: string;
+  readonly #authorization: string;
   readonly #userAgent: string;
 
-  constructor(baseUrl: string, token: string, userAgent: string) {
+  constructor(baseUrl: string, auth: JiraAuth, userAgent: string) {
     let origin: URL;
     try {
       origin = new URL(baseUrl);
@@ -33,7 +40,12 @@ export class JiraClient {
       throw new UserError(`jira.baseUrl must be https (got ${baseUrl})`);
     }
     this.origin = origin;
-    this.#token = token;
+    if (auth.kind === "basic") {
+      if (!auth.email) throw new UserError("Jira Cloud needs jira.email in localflow.json (paired with the API token).");
+      this.#authorization = "Basic " + Buffer.from(`${auth.email}:${auth.token}`).toString("base64");
+    } else {
+      this.#authorization = `Bearer ${auth.token}`;
+    }
     this.#userAgent = userAgent;
   }
 
@@ -53,7 +65,7 @@ export class JiraClient {
           method: "GET",
           redirect: "manual",
           headers: {
-            Authorization: `Bearer ${this.#token}`,
+            Authorization: this.#authorization,
             Accept: accept,
             "User-Agent": this.#userAgent,
             "X-Atlassian-Token": "no-check",

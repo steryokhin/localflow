@@ -30,18 +30,31 @@ export interface Config {
   version: number;
   jira: {
     baseUrl: string;
+    /** "datacenter": REST v2, Bearer PAT, wiki markup. "cloud": REST v2, Basic auth (email + API token). */
+    flavor: "datacenter" | "cloud";
+    /** Cloud only: the account email paired with the API token. */
+    email?: string;
     tokenFile: string;
     userAgent: string;
     maxAttachmentMb: number;
     /** Field names or ids never rendered into ticket.md (noisy fields). */
     ignoreFields: string[];
+    /** Field id -> human name, for imported data that carries no names (Rovo). Merged over what REST reports. */
+    fieldNames: Record<string, string>;
+    /**
+     * Who "me" is for imported data: matched against assignee accountId, email, key, name or
+     * display name. REST sync learns this from /myself instead.
+     */
+    me?: string;
+    /** How plain-string rich text is interpreted: wiki markup (Data Center) or Markdown (Rovo output). */
+    textFormat: "wiki" | "markdown";
   };
   projects: Record<string, ProjectConfig>;
 }
 
 export const DEFAULT_IGNORE_FIELDS = ["Rank", "Development", "Last Viewed"];
 
-export function defaultConfig(opts: { jiraUrl?: string; project?: string; localPrefix?: string }): Config {
+export function defaultConfig(opts: { jiraUrl?: string; project?: string; localPrefix?: string; cloud?: boolean }): Config {
   const projects: Record<string, ProjectConfig> = {};
   const jiraProject = opts.project ?? "PROJ";
   projects[jiraProject] = {
@@ -59,10 +72,14 @@ export function defaultConfig(opts: { jiraUrl?: string; project?: string; localP
     version: 1,
     jira: {
       baseUrl: opts.jiraUrl ?? "https://jira.example.com",
+      flavor: opts.cloud ? "cloud" : "datacenter",
+      ...(opts.cloud ? { email: "you@example.com" } : {}),
       tokenFile: "~/.config/localflow/jira-token",
       userAgent: "localflow/0.1",
       maxAttachmentMb: 25,
       ignoreFields: [...DEFAULT_IGNORE_FIELDS],
+      fieldNames: {},
+      textFormat: opts.cloud ? "markdown" : "wiki",
     },
     projects,
   };
@@ -89,6 +106,9 @@ export function loadConfig(vault: string): Config {
   parsed.jira.userAgent ??= "localflow/0.1";
   parsed.jira.maxAttachmentMb ??= 25;
   parsed.jira.ignoreFields ??= [...DEFAULT_IGNORE_FIELDS];
+  parsed.jira.flavor ??= "datacenter";
+  parsed.jira.fieldNames ??= {};
+  parsed.jira.textFormat ??= parsed.jira.flavor === "cloud" ? "markdown" : "wiki";
   return parsed;
 }
 
