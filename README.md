@@ -1,74 +1,77 @@
 # Local Flow
 
-Локальное зеркало Jira-тикетов плюс твои заметки рядом с тикетом.
-Синк только в одну сторону: **Jira → локальные файлы**. Ничего не уходит с машины.
+A local-only mirror of your Jira tickets with your own notes next to each one.
+Sync is strictly one-way: **Jira → local files**. Nothing leaves your machine.
 
-- Ноль зависимостей: TypeScript без сборки, запускается Node ≥ 22.18 или Bun.
-- Сеть — только `src/jira/client.ts`: одни GET-запросы и только на хост из конфига.
-- Хранилище — обычная папка с локальным git без remote. Git даёт diff и историю версий.
+- Zero dependencies: TypeScript with no build step, runs on Node ≥ 22.18 or Bun.
+- Network access lives in one file (`src/jira/client.ts`): GET requests only, to the configured
+  Jira host only. A test enforces this.
+- The vault is a plain folder with a local git repository and no remote. Git gives you diffs and
+  full version history of every ticket for free.
+- Built for working with an AI coding agent: a Claude Code skill ships with the tool.
 
-## Установка
+## Install
 
 ```bash
 git clone <repo> ~/work/localflow
-~/work/localflow/install.sh      # симлинки: ~/.local/bin/lf и ~/.claude/skills/localflow
+~/work/localflow/install.sh      # symlinks ~/.local/bin/lf and ~/.claude/skills/localflow
 ```
 
-## Первый запуск
+## First run
 
 ```bash
 lf init ~/LocalFlow --jira-url https://jira.example.com --project PROJ --local-prefix WORK
-# read-only Personal Access Token из Jira:
+# a read-only Personal Access Token from Jira:
 mkdir -p ~/.config/localflow
 printf '%s' 'TOKEN' > ~/.config/localflow/jira-token && chmod 600 ~/.config/localflow/jira-token
 lf doctor
 lf sync --dry-run
 lf sync
-lf seen --all        # первый синк помечает всё как новое
+lf seen --all        # the first sync marks everything as new
 ```
 
-## Хранилище
+## The vault
 
 ```
 ~/LocalFlow/
-  localflow.json              конфиг
-  INBOX.md                    генерируется: что нового + доска (вне git)
-  .localflow/                 служебное состояние (вне git)
+  localflow.json              config
+  INBOX.md                    generated: what is new + the board (not in git)
+  .localflow/                 local state (not in git)
   projects/
     PROJ/PROJ-123-slug/
-      ticket.md               генерируется из Jira — руками не править
-      attachments/            вложения из Jira
-      raw/issue.json          сырой ответ Jira, оригинал один в один
-      notes.md                твоё: статус и основная заметка
-      *.md, что угодно        твоё: синк никогда не трогает
-    WORK/WORK-001-slug/       свой локальный тикет (ticket.md редактируется)
+      ticket.md               generated from Jira — never edit by hand
+      attachments/            files from Jira
+      raw/issue.json          the raw Jira response, byte for byte
+      notes.md                yours: workflow status and main note
+      *.md, anything else     yours: the sync never touches it
+    WORK/WORK-001-slug/       a local ticket of your own (ticket.md is editable)
 ```
 
-Синк владеет только `ticket.md`, `attachments/`, `raw/`. Твой статус (`inbox`, `inprogress`,
-`inreview`, `done`, `archived`) живёт в `notes.md` и синком не меняется; если Jira ушла
-дальше твоего статуса, `lf ls` это подсветит.
+The sync owns only `ticket.md`, `attachments/` and `raw/`. Your workflow status (`inbox`,
+`inprogress`, `inreview`, `done`, `archived`) lives in `notes.md` and is never changed by the
+sync; when Jira has moved further than your status, `lf ls` points it out.
 
-## Команды
+## Commands
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `lf sync [--project P] [--preset N] [--jql "…"] [--key K1,K2] [--dry-run] [--force]` | подтянуть изменения из Jira, один коммит на синк |
-| `lf inbox` | тикеты, изменившиеся с прошлого просмотра, со сводкой |
-| `lf diff KEY [опции git diff]` | что именно изменилось в тикете |
-| `lf seen KEY… \| --all` | отметить прочитанным |
-| `lf ls [--status S] [--mine] [--project P] [--unread] [--all]` | доска в терминале |
-| `lf start KEY` / `lf status KEY <status>` | твой статус |
-| `lf note KEY NAME` | новый файл-заметка в папке тикета |
-| `lf create PREFIX "title"` | свой локальный тикет |
-| `lf open [KEY]` / `lf path KEY` | открыть в редакторе / напечатать путь |
-| `lf commit [-m MSG]` | закоммитить свои заметки в локальный git хранилища |
-| `lf report [--date D] [--write]` | отчёт за день из git-истории хранилища и лога сессий, без модели |
-| `lf doctor [--offline]` | проверка окружения, токена и доступа к Jira |
+| `lf sync [--project P] [--preset N] [--jql "…"] [--key K1,K2] [--dry-run] [--force]` | pull changes from Jira; one commit per sync |
+| `lf inbox` | tickets changed since you last looked, with a summary |
+| `lf diff KEY [git diff options]` | what exactly changed in a ticket |
+| `lf seen KEY… \| --all` | mark as read |
+| `lf ls [--status S] [--mine] [--project P] [--unread] [--all]` | the board in the terminal |
+| `lf start KEY` / `lf status KEY <status>` | your workflow status |
+| `lf note KEY NAME` | a new note file in the ticket folder |
+| `lf create PREFIX "title"` | a local ticket of your own |
+| `lf open [KEY]` / `lf path KEY` | open in your editor / print the folder path |
+| `lf commit [-m MSG]` | commit your own files (notes) to the vault's local git |
+| `lf report [--date D] [--write]` | the day, from the vault's git history and the session log; no model involved |
+| `lf doctor [--offline]` | check runtime, vault, token and Jira access |
 
-Хранилище ищется так: `--vault PATH`, затем `LOCALFLOW_VAULT`, затем ближайший родитель с
-`localflow.json`, затем `~/LocalFlow`.
+The vault is resolved from `--vault PATH`, then `LOCALFLOW_VAULT`, then the nearest parent folder
+containing `localflow.json`, then `~/LocalFlow`.
 
-## Конфиг
+## Configuration
 
 ```json
 {
@@ -101,34 +104,40 @@ lf seen --all        # первый синк помечает всё как но
 }
 ```
 
-- `fields` — id кастомных полей проекта; у них отдельные секции в `ticket.md`. Все остальные
-  непустые поля попадают в секцию «Other fields» под человеческими именами.
-- `ignoreFields` — имена или id полей, которые шумят в diff и не нужны в `ticket.md`.
-- `statusOverrides` — имя Jira-статуса → локальный статус для новых тикетов.
+- `fields` — ids of the project's custom fields that get their own sections in `ticket.md`.
+  Every other non-empty field is rendered under "Other fields" with its human-readable name.
+- `ignoreFields` — field names or ids that only add noise to diffs and are left out of `ticket.md`.
+- `statusOverrides` — Jira status name → initial local status for new tickets.
 
-## Отчёт за день и лог сессий
+Written for Jira Data Center (REST API v2, Bearer token auth).
 
-`lf report` собирает день без участия модели: что пришло из Jira (сводки sync-коммитов),
-какие тикеты ты двигал и комментировал (закоммиченные заметки), что в работе, и сессии Claude Code.
-Сессии пишет хук `hooks/session-log.sh` — одна JSON-строка в `.localflow/sessions.jsonl` при
-завершении сессии (выход или `/clear`), только из локального транскрипта. Подключить в
-`~/.claude/settings.json`:
+## Daily report and session log
+
+`lf report` assembles the day without a model: what came from Jira (the sync commits' summaries),
+which tickets you moved or annotated (committed notes only), what is in progress, and the Claude
+Code sessions of the day. Sessions are recorded by `hooks/session-log.sh`: one JSON line in
+`.localflow/sessions.jsonl` when a session ends (exit or `/clear`), read from the local transcript
+only. Register it in `~/.claude/settings.json`:
 
 ```json
 "hooks": { "SessionEnd": [ { "hooks": [ { "type": "command", "command": "~/work/localflow/hooks/session-log.sh" } ] } ] }
 ```
 
-## Тесты
+## Claude Code skill
+
+The rules an agent follows when working with `lf` are in `skills/localflow/SKILL.md`;
+`install.sh` links them into `~/.claude/skills/localflow`. The repository's `CLAUDE.md` imports
+the same file.
+
+## Tests
 
 ```bash
-node --test test/*.test.ts     # или: bun test
+node --test test/*.test.ts     # or: bun test
 ```
 
-E2E-тест поднимает фейковый Jira на 127.0.0.1 и гоняет синк на временном хранилище.
-`test/network-guard.test.ts` следит, чтобы сеть использовалась только в клиенте Jira.
+The end-to-end test starts a fake Jira on 127.0.0.1 and runs the sync against a temporary vault.
+`test/network-guard.test.ts` makes sure network access stays inside the Jira client.
 
-## Скилл для Claude Code
+## License
 
-Правила работы с `lf` для агента лежат в `skills/localflow/SKILL.md`; `install.sh`
-подключает их симлинком в `~/.claude/skills/localflow`. Тот же текст импортирует
-`CLAUDE.md` репозитория.
+BSD 2-Clause. See `LICENSE`.

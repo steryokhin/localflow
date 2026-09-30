@@ -12,5 +12,6 @@
   },
   "engines": {
     "node": ">=22.18"
-  }
+  },
+  "license": "BSD-2-Clause"
 }
