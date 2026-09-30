@@ -138,6 +138,17 @@ node --test test/*.test.ts     # or: bun test
 The end-to-end test starts a fake Jira on 127.0.0.1 and runs the sync against a temporary vault.
 `test/network-guard.test.ts` makes sure network access stays inside the Jira client.
 
+## Status and disclaimer
+
+Early, personal tooling: written for one workflow and one Jira Data Center instance, tested against
+an invented Jira, not yet battle-tested on real data. Expect rough edges.
+
+Use at your own risk. The software is provided "as is", without warranty of any kind; the author is
+not responsible for lost notes, misread tickets, or anything your employer thinks about a Jira
+mirror on your laptop. Read your company's policies before pointing it at a corporate Jira. It never
+writes to Jira and never sends data anywhere except the Jira host you configure — but verify that
+yourself: the code is small enough to read in one sitting.
+
 ## License
 
 BSD 2-Clause. See `LICENSE`.
