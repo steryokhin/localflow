@@ -1,0 +1,27 @@
+#!/bin/sh
+# Local Flow launcher: runs src/cli.ts with Node (>= 22.18, native type stripping) or Bun.
+# No build step and no dependencies.
+
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *) SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=18)?0:1)'
+}
+
+if node_ok; then
+  exec node --disable-warning=ExperimentalWarning "$ROOT/src/cli.ts" "$@"
+elif command -v bun >/dev/null 2>&1; then
+  exec bun "$ROOT/src/cli.ts" "$@"
+else
+  echo "lf: need Node >= 22.18 or Bun on PATH" >&2
+  exit 127
+fi

@@ -1,0 +1,16 @@
+{
+  "name": "localflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-only Jira mirror with personal notes. One-way sync: Jira -> local files.",
+  "type": "module",
+  "bin": {
+    "lf": "bin/lf"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
