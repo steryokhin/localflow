@@ -1,5 +1,5 @@
 ---
-name: imacdev-localflow
+name: localflow
 description: Working with tickets through Local Flow (`lf`) — a local-only Jira mirror with personal notes. Use when the user mentions a ticket by key (e.g. PROJ-123), asks "what's new in Jira", "sync Jira", "show the ticket", "let's start PROJ-123", "add a note to the ticket", says "lf" or "local flow", or when a task refers to a Jira ticket. Russian triggers work too ("что нового в жире", "синкни жиру", "поехали PROJ-123").
 ---
 

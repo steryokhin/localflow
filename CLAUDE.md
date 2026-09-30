@@ -2,6 +2,6 @@
 
 Rules for working with tickets through Local Flow (local-only Jira mirror + personal notes):
 
-@skills/imacdev-localflow/SKILL.md
+@skills/localflow/SKILL.md
 
 Developing the tool itself: see DEVELOPMENT.md.

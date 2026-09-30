@@ -11,7 +11,7 @@
 
 ```bash
 git clone <repo> ~/work/localflow
-~/work/localflow/install.sh      # симлинки: ~/.local/bin/lf и ~/.claude/skills/imacdev-localflow
+~/work/localflow/install.sh      # симлинки: ~/.local/bin/lf и ~/.claude/skills/localflow
 ```
 
 ## Первый запуск
@@ -116,6 +116,6 @@ E2E-тест поднимает фейковый Jira на 127.0.0.1 и гоня
 
 ## Скилл для Claude Code
 
-Правила работы с `lf` для агента лежат в `skills/imacdev-localflow/SKILL.md`; `install.sh`
-подключает их симлинком в `~/.claude/skills/imacdev-localflow`. Тот же текст импортирует
+Правила работы с `lf` для агента лежат в `skills/localflow/SKILL.md`; `install.sh`
+подключает их симлинком в `~/.claude/skills/localflow`. Тот же текст импортирует
 `CLAUDE.md` репозитория.

@@ -1,6 +1,6 @@
 # Local Flow — development rules
 
-For working with tickets through `lf`, read `skills/imacdev-localflow/SKILL.md` instead.
+For working with tickets through `lf`, read `skills/localflow/SKILL.md` instead.
 Local-only Jira mirror plus personal notes. Runs on a corporate machine: nothing may leave it.
 
 ## Hard rules

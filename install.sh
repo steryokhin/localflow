@@ -3,7 +3,7 @@
 # Only creates symlinks into the home directory; re-running is safe.
 #
 #   ~/.local/bin/lf                       -> <repo>/bin/lf
-#   ~/.claude/skills/imacdev-localflow    -> <repo>/skills/imacdev-localflow
+#   ~/.claude/skills/localflow    -> <repo>/skills/localflow
 
 set -eu
 
@@ -24,7 +24,7 @@ link() {
 
 chmod +x "$ROOT/bin/lf"
 link "$ROOT/bin/lf" "$BIN_DIR/lf"
-link "$ROOT/skills/imacdev-localflow" "$SKILLS_DIR/imacdev-localflow"
+link "$ROOT/skills/localflow" "$SKILLS_DIR/localflow"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
