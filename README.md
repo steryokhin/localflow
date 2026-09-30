@@ -56,6 +56,7 @@ lf seen --all        # the first sync marks everything as new
       notes.md                yours: workflow status and main note
       *.md, anything else     yours: the sync never touches it
     WORK/WORK-001-slug/       a local ticket of your own (ticket.md is editable)
+  notes/                      plain notes outside the board (journal, decisions, …)
 ```
 
 The sync owns only `ticket.md`, `attachments/` and `raw/`. Your workflow status (`inbox`,
@@ -78,6 +79,7 @@ sync; when Jira has moved further than your status, `lf ls` points it out.
 | `lf open [KEY]` / `lf path KEY` | open in your editor / print the folder path |
 | `lf commit [-m MSG]` | commit your own files (notes) to the vault's local git |
 | `lf report [--date D] [--write]` | the day, from the vault's git history and the session log; no model involved |
+| `lf serve [--port 7420] [--open]` | the local web UI (see below) |
 | `lf doctor [--offline]` | check runtime, vault, token and Jira access |
 
 The vault is resolved from `--vault PATH`, then `LOCALFLOW_VAULT`, then the nearest parent folder
@@ -130,6 +132,17 @@ containing `localflow.json`, then `~/LocalFlow`.
   `markdown` for Rovo output; ADF objects are recognised either way.
 - `me` — for imported data: your accountId, email or display name, so `mine` can be computed.
 - `fieldNames` — `customfield_*` → human name, for imported data that carries no field names.
+
+## Web UI
+
+`lf serve` starts the UI at `http://127.0.0.1:7420/`. It binds the loopback interface only,
+answers only to a `127.0.0.1`/`localhost` Host header, loads no external resources and needs a
+custom header for every change, so no other site can talk to it. Four panes, Finder-style:
+where to look (statuses, projects, plain notes) · the ticket list · the ticket folder (Original
+Task and History pinned on top, your files below) · the content. The Jira mirror highlights what
+changed since you last marked the ticket seen; History is the ticket's event feed. Your files
+open in a Notion-style editor: the whole document is rendered, the block you click shows its
+Markdown, leaving it renders it again; ⌘S saves, and so does a pause.
 
 ## Daily report and session log
 

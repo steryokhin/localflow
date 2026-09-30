@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLs, cmdNote, cmdOpen, cmdPath,
-  cmdImport, cmdReport, cmdSeen, cmdStart, cmdStatus, cmdSync,
+  cmdImport, cmdReport, cmdSeen, cmdServe, cmdStart, cmdStatus, cmdSync,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
 import { UserError } from "./util.ts";
@@ -37,6 +37,7 @@ Work
   open [KEY]                      open the ticket folder (or the vault) in your editor
   path KEY                        print the ticket folder path
   commit [-m MSG]                 commit your own files (notes) to the vault's local git
+  serve [--port 7420] [--open]    local web UI on http://127.0.0.1:<port> (loopback only)
 
 Reports
   report [--date YYYY-MM-DD] [--write]
@@ -213,6 +214,14 @@ async function main(argv: string[]): Promise<number> {
     case "path": {
       const { values, positionals } = parse(rest, {});
       cmdPath(resolveVault(values.vault as string | undefined), need(positionals[0], "lf path KEY"));
+      return 0;
+    }
+
+    case "serve": {
+      const { values } = parse(rest, { port: { type: "string" }, open: { type: "boolean" } });
+      const port = values.port === undefined ? undefined : Number(values.port);
+      if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new UserError("--port must be 1..65535");
+      await cmdServe(resolveVault(values.vault as string | undefined), { port, open: values.open as boolean | undefined });
       return 0;
     }
 

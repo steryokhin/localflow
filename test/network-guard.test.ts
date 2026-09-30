@@ -29,8 +29,20 @@ test("fetch is used only by the Jira client", () => {
 });
 
 test("no other network APIs are imported anywhere in src", () => {
-  const re = /node:(http|https|http2|net|tls|dgram|dns)\b|XMLHttpRequest|WebSocket|EventSource|sendBeacon/;
+  // node:http is allowed only in the local web UI server (it binds loopback, see the next test).
+  assert.deepEqual(filesMatching(/node:http\b/), ["serve/server.ts"]);
+  const re = /node:(https|http2|net|tls|dgram|dns)\b|XMLHttpRequest|WebSocket|EventSource|sendBeacon/;
   assert.deepEqual(filesMatching(re), []);
+});
+
+test("the web UI server listens on the loopback interface only", () => {
+  const server = fs.readFileSync(path.join(SRC, "serve", "server.ts"), "utf8");
+  assert.match(server, /LOOPBACK_HOST\s*=\s*"127\.0\.0\.1"/);
+  const listens = server.match(/\.listen\([^)]*\)/g) ?? [];
+  assert.equal(listens.length, 1);
+  assert.match(listens[0], /\.listen\(port,\s*LOOPBACK_HOST\b/);
+  // Nothing else in src may open a listening socket.
+  assert.deepEqual(filesMatching(/\.listen\(/), ["serve/server.ts"]);
 });
 
 test("processes are spawned only for git and for opening the editor", () => {

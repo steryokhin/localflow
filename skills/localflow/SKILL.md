@@ -111,6 +111,13 @@ the report — `lf commit` first.
 - `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.
 - Text search — Grep over `projects/**/ticket.md` and `notes.md`. There is deliberately no vector search.
 
+## Web UI
+
+`lf serve` (then open http://127.0.0.1:7420/) is the user's own view of the same files: ticket
+list, the ticket folder with the Jira mirror and their notes, an editor. It changes nothing about
+how you work: the files are the source of truth, and whatever the user edits there is visible to
+you on disk at once. Do not start it unless the user asks; it runs until Ctrl+C.
+
 ## When something is off
 
 - `lf doctor` — environment, token, Jira access. No token and no connector means no sync; work with what is there.
