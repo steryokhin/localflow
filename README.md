@@ -113,3 +113,11 @@ node --test test/*.test.ts     # или: bun test
 
 E2E-тест поднимает фейковый Jira на 127.0.0.1 и гоняет синк на временном хранилище.
 `test/network-guard.test.ts` следит, чтобы сеть использовалась только в клиенте Jira.
+
+## Скилл для Claude Code
+
+Правила работы с `lf` для агента лежат в `skills/imacdev-localflow/SKILL.md`. Подключение:
+
+```bash
+ln -sfn ~/work/localflow/skills/imacdev-localflow ~/.claude/skills/imacdev-localflow
+```
