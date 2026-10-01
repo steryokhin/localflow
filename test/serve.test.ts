@@ -229,6 +229,7 @@ test("safeRel rejects traversal, dot-directories and internal state", () => {
   assert.throws(() => safeRel("../x"), /Not a valid vault path/);
   assert.throws(() => safeRel("notes/../../x"), /Not a valid vault path/);
   assert.throws(() => safeRel(".git/x"), /Not a valid vault path/);
+  assert.throws(() => safeRel("localflow.json"), /Not a valid vault path/);
   assert.throws(() => safeRel(".localflow/state.json"), /Not a valid vault path/);
   assert.throws(() => safeRel("notes/.hidden.md"), /Not a valid vault path/);
   assert.throws(() => safeRel(""), /Not a valid vault path/);
