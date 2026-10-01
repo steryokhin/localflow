@@ -32,19 +32,19 @@ git clone <repo> ~/work/localflow
 
 ```bash
 lf init ~/LocalFlow --jira-url https://jira.example.com --project PROJ --local-prefix WORK   # add --cloud for Jira Cloud
-# a read-only token (Data Center: Personal Access Token; Cloud: API token from id.atlassian.com):
-mkdir -p ~/.config/localflow
-printf '%s' 'TOKEN' > ~/.config/localflow/jira-token && chmod 600 ~/.config/localflow/jira-token
+# put a read-only token into your password manager (Data Center: Personal Access Token;
+# Cloud: API token with scopes from id.atlassian.com) — lf fetches it with jira.tokenCommand,
+# by default: bw get password localflow-jira
 lf doctor
 lf sync --dry-run
 lf sync
 lf seen --all        # the first sync marks everything as new
 ```
 
-Prefer a password manager over a token file: set `jira.tokenCommand` to an argv array whose
-stdout is the token, e.g. `["bw", "get", "password", "localflow-jira"]` (Bitwarden CLI). `lf` runs
-it without a shell, captures only stdout and never prints the value; stdin stays on the terminal so
-the manager can ask for its master password. For runs started by an agent (no terminal), unlock
+The token is never stored on disk: `jira.tokenCommand` is an argv array whose stdout is the
+token, by default `["bw", "get", "password", "localflow-jira"]` (Bitwarden CLI; any manager with a
+CLI works). `lf` runs it without a shell, captures only stdout and never prints the value; stdin
+stays on the terminal so the manager can ask for its master password. For runs started by an agent (no terminal), unlock
 first in the shell you start the agent from: `export BW_SESSION=$(bw unlock --raw)`.
 
 On Jira Cloud, create the token as an *API token with scopes* and grant only `read:jira-work` and
@@ -105,7 +105,6 @@ containing `localflow.json`, then `~/LocalFlow`.
     "baseUrl": "https://jira.example.com",
     "transport": "rest",
     "flavor": "datacenter",
-    "tokenFile": "~/.config/localflow/jira-token",
     "tokenCommand": ["bw", "get", "password", "localflow-jira"],
     "userAgent": "localflow/0.1",
     "maxAttachmentMb": 25,

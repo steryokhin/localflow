@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   CONFIG_FILE, DEFAULT_VAULT, INBOX_FILE, PROJECTS_DIR, STATE_DIR,
-  defaultConfig, loadConfig, readToken, tokenFileTooOpen, tokenSource,
+  defaultConfig, loadConfig, readToken, tokenSource,
 } from "./config.ts";
 import { getMyself } from "./jira/api.ts";
 import { ATTACHMENTS_DIR } from "./jira/attachments.ts";
@@ -40,7 +40,7 @@ export function cmdInit(
   assertLocalOnly(vault);
   commitPaths(vault, [CONFIG_FILE, ".gitignore"], "init: Local Flow vault");
   out(`Created vault: ${vault}`);
-  out(`Next: edit ${path.join(vault, CONFIG_FILE)} (Jira URL, projects, JQL presets), save a read-only token, then run \`lf doctor\`.`);
+  out(`Next: edit ${path.join(vault, CONFIG_FILE)} (Jira URL, projects, JQL presets), set jira.tokenCommand (password manager), then run \`lf doctor\`.`);
 }
 
 export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Promise<number> {
@@ -78,7 +78,7 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   let token = "";
   try {
     token = readToken(config);
-    check(!tokenFileTooOpen(config), "token", tokenFileTooOpen(config) ? `run: chmod 600 ${config.jira.tokenFile}` : tokenSource(config));
+    check(true, "token", tokenSource(config));
   } catch (e) {
     check(false, "token", (e as Error).message.split("\n")[0]);
   }

@@ -30,14 +30,12 @@ before(async () => {
   await jira.start();
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "localflow-e2e-"));
   vault = path.join(tmp, "vault");
-  const tokenFile = path.join(tmp, "jira-token");
-  fs.writeFileSync(tokenFile, TEST_TOKEN, { mode: 0o600 });
 
   console.log = () => {}; // commands print progress; keep test output clean
   cmdInit(vault, { jiraUrl: jira.baseUrl, project: "DEMO", localPrefix: "WORK" });
   const file = path.join(vault, "localflow.json");
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  raw.jira.tokenFile = tokenFile;
+  raw.jira.tokenCommand = ["printf", "%s", TEST_TOKEN];
   raw.projects.DEMO.defaultPreset = "open";
   raw.projects.DEMO.presets = { open: JQL };
   raw.projects.DEMO.fields = {

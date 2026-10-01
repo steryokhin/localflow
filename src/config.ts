@@ -40,12 +40,11 @@ export interface Config {
     flavor: "datacenter" | "cloud";
     /** Cloud only: the account email paired with the API token. */
     email?: string;
-    /** Plain-text token file, used when tokenCommand is not set. */
-    tokenFile: string;
     /**
-     * Alternative to tokenFile: an argv array whose stdout is the token, e.g.
+     * REST transport only: an argv array whose stdout is the token, e.g.
      * ["bw", "get", "password", "localflow-jira"]. Run without a shell; stdin/stderr stay on the
-     * terminal so the password manager can prompt. The value is never written or logged.
+     * terminal so the password manager can prompt. The token is never stored on disk or logged —
+     * there is deliberately no token file.
      */
     tokenCommand?: string[];
     userAgent: string;
@@ -88,7 +87,7 @@ export function defaultConfig(opts: { jiraUrl?: string; project?: string; localP
       transport: opts.importOnly ? "import" : "rest",
       flavor: opts.cloud ? "cloud" : "datacenter",
       ...(opts.cloud ? { email: "you@example.com" } : {}),
-      tokenFile: "~/.config/localflow/jira-token",
+      ...(opts.importOnly ? {} : { tokenCommand: ["bw", "get", "password", "localflow-jira"] }),
       userAgent: "localflow/0.1",
       maxAttachmentMb: 25,
       ignoreFields: [...DEFAULT_IGNORE_FIELDS],
@@ -116,7 +115,9 @@ export function loadConfig(vault: string): Config {
   if (!parsed.jira?.baseUrl || !parsed.projects) {
     throw new UserError(`${file} must contain "jira.baseUrl" and "projects".`);
   }
-  parsed.jira.tokenFile ??= "~/.config/localflow/jira-token";
+  if (parsed.jira.tokenFile !== undefined) {
+    throw new UserError(`${file}: "jira.tokenFile" is no longer supported — tokens are not stored on disk. Use "jira.tokenCommand".`);
+  }
   parsed.jira.userAgent ??= "localflow/0.1";
   parsed.jira.maxAttachmentMb ??= 25;
   parsed.jira.ignoreFields ??= [...DEFAULT_IGNORE_FIELDS];
@@ -143,39 +144,19 @@ export function resolveVault(flag?: string): string {
 
 /** Human-readable description of where the token comes from, never the token itself. */
 export function tokenSource(config: Config): string {
-  const cmd = config.jira.tokenCommand;
-  return cmd?.length ? `command: ${cmd.join(" ")}` : `file: ${config.jira.tokenFile}`;
+  return `command: ${(config.jira.tokenCommand ?? []).join(" ")}`;
 }
 
 export function readToken(config: Config): string {
   const cmd = config.jira.tokenCommand;
-  if (cmd !== undefined) {
-    if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some((a) => typeof a !== "string")) {
-      throw new UserError('jira.tokenCommand must be a non-empty array of strings, e.g. ["bw", "get", "password", "localflow-jira"].');
-    }
-    return runSecretCommand(cmd);
-  }
-  const file = expandHome(config.jira.tokenFile);
-  let token: string;
-  try {
-    token = fs.readFileSync(file, "utf8").trim();
-  } catch {
+  if (cmd === undefined) {
     throw new UserError(
-      `Jira token file not found: ${file}\n` +
-        `Create a read-only Personal Access Token in Jira and save it:\n` +
-        `  mkdir -p "${path.dirname(file)}" && printf '%s' 'TOKEN' > "${file}" && chmod 600 "${file}"`,
+      'No "jira.tokenCommand" in localflow.json. Tokens are read from a password manager, never from a file, e.g.\n' +
+        '  "tokenCommand": ["bw", "get", "password", "localflow-jira"]',
     );
   }
-  if (!token) throw new UserError(`Jira token file is empty: ${file}`);
-  return token;
-}
-
-/** True when the token file is readable by group or others (file-based tokens only). */
-export function tokenFileTooOpen(config: Config): boolean {
-  if (config.jira.tokenCommand) return false;
-  try {
-    return (fs.statSync(expandHome(config.jira.tokenFile)).mode & 0o077) !== 0;
-  } catch {
-    return false;
+  if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some((a) => typeof a !== "string")) {
+    throw new UserError('jira.tokenCommand must be a non-empty array of strings, e.g. ["bw", "get", "password", "localflow-jira"].');
   }
+  return runSecretCommand(cmd);
 }
