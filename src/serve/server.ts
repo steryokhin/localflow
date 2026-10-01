@@ -80,11 +80,62 @@ function originAllowed(origin: string | undefined, port: number): boolean {
   return origin === `http://${LOOPBACK_HOST}:${port}` || origin === `http://localhost:${port}` || origin === `http://[::1]:${port}`;
 }
 
+/**
+ * Change counter for the page's long-poll: any file event under the vault (except git internals)
+ * bumps it after a short quiet period, and waiting /api/changes requests are answered.
+ */
+class ChangeFeed {
+  version = 1;
+  #waiters: Array<() => void> = [];
+  #timer: NodeJS.Timeout | null = null;
+
+  constructor(vault: string, say: (line: string) => void) {
+    try {
+      const watcher = fs.watch(vault, { recursive: true }, (_event, name) => {
+        const rel = String(name ?? "");
+        if (rel === ".git" || rel.startsWith(".git/") || rel.endsWith(".tmp")) return;
+        this.#bump();
+      });
+      watcher.on("error", (e) => say(`watch error: ${(e as Error).message}`));
+      watcher.unref();
+    } catch (e) {
+      say(`live updates off: ${(e as Error).message}`);
+    }
+  }
+
+  #bump(): void {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      this.version++;
+      const w = this.#waiters;
+      this.#waiters = [];
+      for (const resolve of w) resolve();
+    }, 250);
+    this.#timer.unref();
+  }
+
+  /** Resolves when the version passes `since`, or after `timeoutMs`. */
+  wait(since: number, timeoutMs: number): Promise<number> {
+    if (this.version > since) return Promise.resolve(this.version);
+    return new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(t);
+        this.#waiters = this.#waiters.filter((x) => x !== done);
+        resolve(this.version);
+      };
+      const t = setTimeout(done, timeoutMs);
+      this.#waiters.push(done);
+    });
+  }
+}
+
 export function startServer(vault: string, opts: ServeOptions = {}): Promise<http.Server> {
   assertLocalOnly(vault);
   // Replaced by the real port once listening, so that port 0 (ephemeral) passes the Host check.
   let port = opts.port ?? DEFAULT_PORT;
   const say = opts.log ?? (() => {});
+  const changes = new ChangeFeed(vault, say);
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -96,9 +147,14 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
       res.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'");
 
       if (url.pathname.startsWith("/api/")) {
+        const route = `${method} ${url.pathname}`;
         if (method !== "GET") {
           if (req.headers["x-localflow"] !== "1") throw new HttpError(403, "Missing X-LocalFlow header");
           if (!originAllowed(req.headers.origin, port)) throw new HttpError(403, "Cross-origin request refused");
+        }
+        if (route === "GET /api/changes") {
+          const since = Number(url.searchParams.get("since") ?? 0);
+          return json(res, 200, { version: await changes.wait(Number.isFinite(since) ? since : 0, 25_000) });
         }
         return json(res, 200, await api(vault, method, url, method === "GET" ? {} : parseJson(await readBody(req))));
       }

@@ -373,3 +373,14 @@ test("/raw serves vault files as text and refuses everything outside", async () 
   const post405 = await fetch(`${base}/raw/x`, { method: "POST", headers: { "x-localflow": "1" } });
   assert.equal(post405.status, 405);
 });
+
+test("GET /api/changes answers immediately when behind and after a file change when current", async () => {
+  const first = await (await fetch(`${base}/api/changes?since=0`)).json();
+  assert.ok(first.version >= 1);
+  // Current version: the request waits; a new file under the vault releases it.
+  const waiting = fetch(`${base}/api/changes?since=${first.version}`).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 150));
+  fs.writeFileSync(path.join(vault, "notes", "live.md"), "# live\n");
+  const next = await waiting;
+  assert.ok(next.version > first.version);
+});

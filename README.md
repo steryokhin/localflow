@@ -157,8 +157,10 @@ custom header for every change, so no other site can talk to it. Four panes, Fin
 where to look (statuses, projects, plain notes) · the ticket list · the ticket folder (Original
 Task and History pinned on top, your files below) · the content. The Jira mirror highlights what
 changed since you last marked the ticket seen; History is the ticket's event feed. Your files
-open in a Notion-style editor: the whole document is rendered, the block you click shows its
-Markdown, leaving it renders it again; ⌘S saves, and so does a pause.
+open read-only; *Edit* (or a double-click on a block) switches to a Notion-style editor: the whole
+document stays rendered, the block you click shows its Markdown, leaving it renders it again; ⌘S
+saves, and so does a pause. The page follows the vault: files added or changed by `lf`, an agent
+or your editor appear without a reload, and an open editor is never overwritten.
 
 ## Daily report and session log
 
