@@ -218,3 +218,11 @@ test("only GET requests ever reached Jira", () => {
   assert.ok(jira.requests.length > 0);
   assert.deepEqual([...new Set(jira.requests.map((r) => r.method))], ["GET"]);
 });
+
+test("a new ticket starts in inbox even when Jira's category says In Progress", async () => {
+  jira.issues.set("DEMO-9", makeIssue("DEMO-9", { summary: "Ready for pickup", status: { name: "Ready for Pickup", statusCategory: { name: "In Progress", key: "indeterminate" } } }));
+  jira.issues.set("DEMO-10", makeIssue("DEMO-10", { summary: "Already closed", status: { name: "Closed", statusCategory: { name: "Done", key: "done" } } }));
+  await runSync(vault, config, { keys: ["DEMO-9", "DEMO-10"] });
+  assert.equal(findTicket(vault, "DEMO-9")!.status, "inbox");
+  assert.equal(findTicket(vault, "DEMO-10")!.status, "done");
+});

@@ -139,7 +139,9 @@ containing `localflow.json`, then `~/LocalFlow`.
 - `fields` — ids of the project's custom fields that get their own sections in `ticket.md`.
   Every other non-empty field is rendered under "Other fields" with its human-readable name.
 - `ignoreFields` — field names or ids that only add noise to diffs and are left out of `ticket.md`.
-- `statusOverrides` — Jira status name → initial local status for new tickets.
+- `statusOverrides` — Jira status name → initial local status for new tickets. Without an override a
+  new ticket starts in `inbox` (you have not triaged it yet), except tickets already closed in Jira,
+  which start in `done`.
 - `transport` — `rest` (lf fetches from Jira itself) or `import` (no outbound network; only `lf import`).
 - `flavor` — `datacenter` (REST v2, Bearer PAT, wiki markup) or `cloud` (REST v2, Basic auth with
   `email` + API token). `textFormat` says how plain-string rich text is read: `wiki` for REST,
@@ -155,8 +157,10 @@ custom header for every change, so no other site can talk to it. Four panes, Fin
 where to look (statuses, projects, plain notes) · the ticket list · the ticket folder (Original
 Task and History pinned on top, your files below) · the content. The Jira mirror highlights what
 changed since you last marked the ticket seen; History is the ticket's event feed. Your files
-open in a Notion-style editor: the whole document is rendered, the block you click shows its
-Markdown, leaving it renders it again; ⌘S saves, and so does a pause.
+open read-only; *Edit* (or a double-click on a block) switches to a Notion-style editor: the whole
+document stays rendered, the block you click shows its Markdown, leaving it renders it again; ⌘S
+saves, and so does a pause. The page follows the vault: files added or changed by `lf`, an agent
+or your editor appear without a reload, and an open editor is never overwritten.
 
 ## Daily report and session log
 

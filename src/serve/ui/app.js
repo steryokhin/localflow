@@ -368,20 +368,53 @@
     }
 
     render() {
-      const hint = this.editable ? `<span class="hint" id="savehint"></span>` : `<span class="hint">read-only</span>`;
+      // Files open read-only so text can be selected and copied; "Edit" (or a double-click on a
+      // block) switches to editing, "Done" switches back and saves.
+      const hint = this.editable
+        ? `<span class="hint" id="savehint"></span><button class="btn" id="editmode">Edit</button>`
+        : `<span class="hint">read-only</span>`;
       let h = `<div class="eh"><span class="path">${this.title}</span>${hint}</div>${this.props}` +
-        `<div class="scroll"><div class="doc${this.editable ? " rw" : ""}" id="doc">`;
+        `<div class="scroll"><div class="doc" id="doc">`;
       this.blocks.forEach((b, i) => { h += `<div class="blk" data-i="${i}">${this.paintHtml(b)}</div>`; });
       $("content").innerHTML = h + `</div></div>`;
       this.doc = $("doc");
+      this.editing = false;
       this.updateHint();
       if (this.editable) {
-        this.doc.addEventListener("click", (e) => {
-          if (e.target.closest("a, input, button")) return;
+        $("editmode").addEventListener("click", () => this.setEditing(!this.editing));
+        const blockAt = (e) => {
+          if (e.target.closest("a, input, button")) return null;
           const blk = e.target.closest(".blk");
-          if (blk && !blk.classList.contains("editing")) this.edit(Number(blk.dataset.i), "end");
+          return blk && !blk.classList.contains("editing") ? Number(blk.dataset.i) : null;
+        };
+        this.doc.addEventListener("click", (e) => {
+          if (!this.editing) return;
+          const sel = window.getSelection();
+          if (sel && !sel.isCollapsed && sel.toString().length > 0) return;
+          const i = blockAt(e);
+          if (i !== null) this.edit(i, "end");
+        });
+        this.doc.addEventListener("dblclick", (e) => {
+          if (this.editing) return;
+          const i = blockAt(e);
+          if (i === null) return;
+          window.getSelection()?.removeAllRanges();
+          this.setEditing(true);
+          this.edit(i, "end");
         });
       }
+    }
+
+    setEditing(on) {
+      this.editing = on;
+      this.doc.classList.toggle("rw", on);
+      const b = $("editmode");
+      if (b) { b.textContent = on ? "Done" : "Edit"; b.classList.toggle("primary", on); }
+      if (!on) {
+        if (this.active >= 0) this.leave();
+        if (this.dirty) this.save();
+      }
+      this.updateHint();
     }
 
     paintHtml(b) {
@@ -505,11 +538,20 @@
       } catch (err) { toast(err.message); }
     }
 
+    /** True when the file on disk no longer matches what this editor was built from. */
+    async changedOnDisk() {
+      try {
+        const view = await api("GET", `/api/file?path=${encodeURIComponent(this.rel)}`);
+        return view.head !== this.head || view.blocks.map((b) => b.src).join("\n\n") !== this.text();
+      } catch { return false; }
+    }
+
     updateHint() {
       const el = $("savehint");
       if (!el) return;
       el.className = "hint" + (this.dirty ? " dirty" : "");
-      el.innerHTML = this.dirty ? "Unsaved · <kbd>⌘S</kbd>" : `${this.savedAt ? "Saved " + esc(this.savedAt) : "Saved"} · <kbd>⌘S</kbd> to save`;
+      const saved = this.savedAt ? "Saved " + esc(this.savedAt) : "Saved";
+      el.innerHTML = this.dirty ? "Unsaved · <kbd>⌘S</kbd>" : this.editing ? `${saved} · <kbd>⌘S</kbd> to save` : `${saved} · double-click a block to edit`;
     }
 
     destroy() {
@@ -626,5 +668,67 @@
   window.addEventListener("hashchange", () => { onRoute().catch((err) => toast(err.message)); });
   window.addEventListener("beforeunload", () => closeEditor());
 
-  loadOverview().then(onRoute).catch((err) => toast(err.message));
+  // ---------- live updates ----------
+  // The server long-polls /api/changes against a file watcher. On a change the panes are
+  // redrawn in place: the search box keeps its text and focus, the lists keep their scroll
+  // position, and a file being edited (or with unsaved text) is left alone.
+
+  function keepScroll(el, fn) {
+    const top = el ? el.scrollTop : 0;
+    fn();
+    if (el) el.scrollTop = top;
+  }
+
+  async function refresh() {
+    const q = $("q");
+    const search = q && document.activeElement === q ? { pos: q.selectionStart } : null;
+    try { state.overview = await api("GET", "/api/overview"); } catch (err) { toast(err.message); return; }
+    renderNav();
+    keepScroll($("list").querySelector(".scroll"), renderList);
+    if (search) { const nq = $("q"); nq.focus(); nq.setSelectionRange(search.pos, search.pos); }
+
+    const r = state.route;
+    const ed = state.editor;
+    const redraw = async () => {
+      const content = $("content").querySelector(".scroll");
+      const top = content ? content.scrollTop : 0;
+      await renderContent();
+      const again = $("content").querySelector(".scroll");
+      if (again) again.scrollTop = top;
+    };
+    // The content pane is redrawn only when what it shows actually changed, so a text selection
+    // or an open editor survives unrelated changes elsewhere in the vault.
+    if (r.kind === "ticket") {
+      let fresh;
+      try { fresh = await api("GET", `/api/ticket/${r.key}`); } catch { return; }
+      const changed = JSON.stringify(fresh) !== JSON.stringify(state.ticket);
+      state.ticket = fresh;
+      if (changed) keepScroll($("folder").querySelector(".body"), renderFolder);
+      if (ed) { if (!ed.editing && !ed.dirty && await ed.changedOnDisk()) await redraw(); }
+      else if (changed) await redraw();
+    } else if (r.kind === "note" && ed && !ed.editing && !ed.dirty && await ed.changedOnDisk()) {
+      await redraw();
+    }
+  }
+
+  async function watchChanges() {
+    let since = 0;
+    for (;;) {
+      try {
+        const { version } = await api("GET", `/api/changes?since=${since}`);
+        if (since && version > since) await refresh();
+        since = version;
+      } catch {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  }
+
+  loadOverview()
+    .then(onRoute)
+    .then(() => { watchChanges(); })
+    .catch((err) => {
+      $("content").innerHTML = `<div class="empty">Cannot load the vault: ${esc(err.message)}</div>`;
+      toast(err.message);
+    });
 })();
