@@ -134,13 +134,14 @@ export async function applyIssues(vault: string, config: Config, input: ApplyInp
     commitTargets.push(`${rel}/${TICKET_FILE}`, `${rel}/${ATTACHMENTS_DIR}`, `${rel}/${RAW_DIR}`);
 
     // notes.md is created once and never touched again: it belongs to the user.
+    // The user's status starts at "inbox" (= not triaged yet) whatever Jira says — Jira's
+    // "In Progress" category covers states like "Ready for Pickup" that mean nothing was started.
+    // Only tickets already closed in Jira skip the inbox; statusOverrides can still pin a status.
     const notesPath = path.join(dir, NOTES_FILE);
     if (!fs.existsSync(notesPath)) {
-      const status = mapLocalStatus(
-        issue.fields.status?.statusCategory?.name ?? "",
-        issue.fields.status?.name ?? "",
-        project,
-      );
+      const mapped = mapLocalStatus(issue.fields.status?.statusCategory?.name ?? "", issue.fields.status?.name ?? "", project);
+      const overridden = project?.statusOverrides?.[(issue.fields.status?.name ?? "").trim().toLowerCase()] !== undefined;
+      const status = overridden || mapped === "done" ? mapped : "inbox";
       writeFileAtomic(notesPath, notesStub(key, status));
       commitTargets.push(`${rel}/${NOTES_FILE}`);
     }

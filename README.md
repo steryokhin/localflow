@@ -139,7 +139,9 @@ containing `localflow.json`, then `~/LocalFlow`.
 - `fields` — ids of the project's custom fields that get their own sections in `ticket.md`.
   Every other non-empty field is rendered under "Other fields" with its human-readable name.
 - `ignoreFields` — field names or ids that only add noise to diffs and are left out of `ticket.md`.
-- `statusOverrides` — Jira status name → initial local status for new tickets.
+- `statusOverrides` — Jira status name → initial local status for new tickets. Without an override a
+  new ticket starts in `inbox` (you have not triaged it yet), except tickets already closed in Jira,
+  which start in `done`.
 - `transport` — `rest` (lf fetches from Jira itself) or `import` (no outbound network; only `lf import`).
 - `flavor` — `datacenter` (REST v2, Bearer PAT, wiki markup) or `cloud` (REST v2, Basic auth with
   `email` + API token). `textFormat` says how plain-string rich text is read: `wiki` for REST,
