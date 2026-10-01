@@ -65,7 +65,8 @@ export async function runSync(vault: string, config: Config, opts: SyncOptions =
   const client = new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent);
   const warnings: string[] = [];
 
-  const me = await getMyself(client);
+  const flavor = config.jira.flavor;
+  const me = await getMyself(client, flavor);
   say(`Jira user: ${me.displayName} (${me.key || me.accountId || me.name})`);
 
   const issues = new Map<string, JiraIssue>();
@@ -78,7 +79,7 @@ export async function runSync(vault: string, config: Config, opts: SyncOptions =
   let queries: string[];
   if (opts.keys?.length) {
     queries = [`key in (${opts.keys.join(", ")})`];
-    const res = await getIssuesByKeys(client, opts.keys);
+    const res = await getIssuesByKeys(client, opts.keys, flavor);
     absorb(res);
     for (const key of res.missing) warnings.push(`${key}: not found in Jira`);
   } else {
@@ -86,7 +87,7 @@ export async function runSync(vault: string, config: Config, opts: SyncOptions =
     queries = resolved.queries;
     for (const jql of queries) {
       say(`JQL: ${jql}`);
-      absorb(await searchIssues(client, jql));
+      absorb(await searchIssues(client, jql, flavor));
     }
     // Tickets that left the query (usually closed) would otherwise stay frozen as "open" locally.
     if (!opts.noRefresh && resolved.refreshProjects.length) {
@@ -96,14 +97,14 @@ export async function runSync(vault: string, config: Config, opts: SyncOptions =
         .map((t) => t.key);
       if (stale.length) {
         say(`Refreshing ${stale.length} local ticket(s) no longer returned by the query`);
-        const res = await getIssuesByKeys(client, stale);
+        const res = await getIssuesByKeys(client, stale, flavor);
         absorb(res);
         for (const key of res.missing) warnings.push(`${key}: no longer exists in Jira (deleted or moved)`);
       }
     }
   }
   say(`Fetched ${issues.size} issue(s)`);
-  for (const issue of issues.values()) await ensureAllComments(client, issue);
+  for (const issue of issues.values()) await ensureAllComments(client, issue, flavor);
 
   return applyIssues(
     vault,

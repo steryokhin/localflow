@@ -21,10 +21,16 @@ export interface JiraUser {
   emailAddress: string;
 }
 
-const API = "/rest/api/2";
+export type Flavor = "datacenter" | "cloud";
 
-export async function getMyself(client: JiraClient): Promise<JiraUser> {
-  const me = await client.getJson(`${API}/myself`);
+// Data Center still serves REST v2. Cloud removed `/rest/api/2/search` (410 Gone) in favour of
+// `/rest/api/3/search/jql` with token pagination; the rest of v3 is a path change only.
+function base(flavor: Flavor): string {
+  return flavor === "cloud" ? "/rest/api/3" : "/rest/api/2";
+}
+
+export async function getMyself(client: JiraClient, flavor: Flavor = "datacenter"): Promise<JiraUser> {
+  const me = await client.getJson(`${base(flavor)}/myself`);
   return {
     key: me.key ?? "",
     name: me.name ?? "",
@@ -39,12 +45,38 @@ export function userFromString(me: string): JiraUser {
   return { key: me, name: me, displayName: me, accountId: me, emailAddress: me };
 }
 
-export async function searchIssues(client: JiraClient, jql: string, pageSize = 50): Promise<SearchResult> {
+/** Cloud's search endpoint does not expand field names; `/field` lists them once per sync. */
+async function cloudFieldNames(client: JiraClient): Promise<Record<string, string>> {
+  const fields = await client.getJson("/rest/api/3/field");
+  const names: Record<string, string> = {};
+  for (const f of Array.isArray(fields) ? fields : []) if (f?.id && f?.name) names[f.id] = f.name;
+  return names;
+}
+
+async function searchCloud(client: JiraClient, jql: string, pageSize: number): Promise<SearchResult> {
+  const issues: JiraIssue[] = [];
+  let nextPageToken: string | undefined;
+  for (;;) {
+    const page = await client.getJson("/rest/api/3/search/jql", {
+      jql,
+      maxResults: pageSize,
+      fields: "*all",
+      ...(nextPageToken ? { nextPageToken } : {}),
+    });
+    issues.push(...(page.issues ?? []));
+    nextPageToken = page.nextPageToken;
+    if (!nextPageToken || page.isLast || (page.issues ?? []).length === 0) break;
+  }
+  return { issues, names: await cloudFieldNames(client) };
+}
+
+export async function searchIssues(client: JiraClient, jql: string, flavor: Flavor = "datacenter", pageSize = 50): Promise<SearchResult> {
+  if (flavor === "cloud") return searchCloud(client, jql, pageSize);
   const issues: JiraIssue[] = [];
   const names: Record<string, string> = {};
   let startAt = 0;
   for (;;) {
-    const page = await client.getJson(`${API}/search`, {
+    const page = await client.getJson(`${base(flavor)}/search`, {
       jql,
       startAt,
       maxResults: pageSize,
@@ -61,10 +93,16 @@ export async function searchIssues(client: JiraClient, jql: string, pageSize = 5
   return { issues, names };
 }
 
+/** One minimal search request — what `lf doctor` uses to prove the search endpoint is alive. */
+export async function probeSearch(client: JiraClient, flavor: Flavor = "datacenter"): Promise<void> {
+  if (flavor === "cloud") await client.getJson("/rest/api/3/search/jql", { jql: "order by updated desc", maxResults: 1, fields: "key" });
+  else await client.getJson(`${base(flavor)}/search`, { jql: "order by updated desc", maxResults: 1, fields: "key" });
+}
+
 /** Returns null when the issue does not exist (deleted or moved). */
-export async function getIssue(client: JiraClient, key: string): Promise<SearchResult | null> {
+export async function getIssue(client: JiraClient, key: string, flavor: Flavor = "datacenter"): Promise<SearchResult | null> {
   try {
-    const issue = await client.getJson(`${API}/issue/${encodeURIComponent(key)}`, { fields: "*all", expand: "names" });
+    const issue = await client.getJson(`${base(flavor)}/issue/${encodeURIComponent(key)}`, { fields: "*all", expand: "names" });
     const names = issue.names ?? {};
     delete issue.names;
     return { issues: [issue], names };
@@ -78,12 +116,13 @@ export async function getIssue(client: JiraClient, key: string): Promise<SearchR
 export async function getIssuesByKeys(
   client: JiraClient,
   keys: string[],
+  flavor: Flavor = "datacenter",
 ): Promise<SearchResult & { missing: string[] }> {
   const out: SearchResult & { missing: string[] } = { issues: [], names: {}, missing: [] };
   for (let i = 0; i < keys.length; i += 50) {
     const chunk = keys.slice(i, i + 50);
     try {
-      const res = await searchIssues(client, `key in (${chunk.join(", ")})`);
+      const res = await searchIssues(client, `key in (${chunk.join(", ")})`, flavor);
       out.issues.push(...res.issues);
       Object.assign(out.names, res.names);
       const found = new Set(res.issues.map((x) => x.key));
@@ -92,7 +131,7 @@ export async function getIssuesByKeys(
       // Jira rejects the whole `key in (...)` query when one key does not exist.
       if (!(e instanceof JiraHttpError && e.status === 400)) throw e;
       for (const key of chunk) {
-        const one = await getIssue(client, key);
+        const one = await getIssue(client, key, flavor);
         if (!one) {
           out.missing.push(key);
           continue;
@@ -106,11 +145,11 @@ export async function getIssuesByKeys(
 }
 
 /** Search results may carry a truncated (or absent) comment list; load the full one if so. */
-export async function ensureAllComments(client: JiraClient, issue: JiraIssue): Promise<void> {
+export async function ensureAllComments(client: JiraClient, issue: JiraIssue, flavor: Flavor = "datacenter"): Promise<void> {
   const c = issue.fields.comment;
   const have: number = c?.comments?.length ?? 0;
   if (c && (c.total ?? have) <= have) return;
-  const full = await client.getJson(`${API}/issue/${encodeURIComponent(issue.key)}/comment`, { maxResults: 1000 });
+  const full = await client.getJson(`${base(flavor)}/issue/${encodeURIComponent(issue.key)}/comment`, { maxResults: 1000 });
   issue.fields.comment = {
     comments: full.comments ?? [],
     total: full.total ?? (full.comments ?? []).length,
