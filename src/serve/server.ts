@@ -181,7 +181,7 @@ async function api(vault: string, method: string, url: URL, body: Record<string,
     const updates = body.updates;
     if (!updates || typeof updates !== "object") throw new HttpError(400, 'Missing "updates"');
     const clean: Record<string, string> = {};
-    for (const [k, v] of Object.entries(updates as Record<string, unknown>)) if (typeof v === "string" && /^[A-Za-z_][\w-]*$/.test(k)) clean[k] = v;
+    for (const [k, v] of Object.entries(updates as Record<string, unknown>)) if (typeof v === "string" && /^[A-Za-z_][\w-]*$/.test(k) && !["__proto__", "constructor", "prototype"].includes(k)) clean[k] = v;
     setFrontmatter(vault, str(body, "path"), clean);
     return { ok: true };
   }

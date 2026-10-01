@@ -3,7 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECTS_DIR, STATE_DIR, loadConfig } from "../config.ts";
+import { CONFIG_FILE, PROJECTS_DIR, STATE_DIR, loadConfig } from "../config.ts";
 import type { Config } from "../config.ts";
 import { LOCAL_STATUSES } from "../jira/mapping.ts";
 import { diffBlocks } from "../render/blockdiff.ts";
@@ -31,7 +31,8 @@ export function safeRel(rel: string): string {
   if (!norm || norm === "." || parts.includes("..") || parts.some((p) => p.startsWith(".") && p !== ".")) {
     throw new UserError(`Not a valid vault path: ${rel}`);
   }
-  if (parts[0] === STATE_DIR || parts[0] === ".git") throw new UserError(`Not a valid vault path: ${rel}`);
+  // The config holds the Jira URL, email and token command: not something the page needs.
+  if (parts[0] === STATE_DIR || parts[0] === ".git" || parts[0] === CONFIG_FILE) throw new UserError(`Not a valid vault path: ${rel}`);
   return norm;
 }
 

@@ -8,6 +8,8 @@
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // Only http(s) links are allowed into href attributes.
+  const safeUrl = (s) => (/^https?:\/\//i.test(String(s ?? "").trim()) ? esc(String(s).trim()) : "");
 
   const STATUS_LABELS = { inbox: "Inbox", inprogress: "In progress", inreview: "In review", done: "Done", archived: "Archived" };
   const NAV_STATUSES = ["inbox", "inprogress", "inreview", "done"];
@@ -291,7 +293,7 @@
       `<span class="f">${jiraChip(r)}${r.ahead ? `<span class="jira-hint">Jira is ahead of you</span>` : ""}</span>` +
       (r.priority ? `<span class="f">${prioChip(r.priority)}</span>` : "") +
       (r.assignee ? `<span class="f">${esc(r.mine ? "You" : r.assignee)}</span>` : "") +
-      (t.fm.jira_url ? `<a class="ext" href="${esc(t.fm.jira_url)}" target="_blank" rel="noopener">Open in Jira ↗</a>` : "") +
+      (safeUrl(t.fm.jira_url) ? `<a class="ext" href="${safeUrl(t.fm.jira_url)}" target="_blank" rel="noopener">Open in Jira ↗</a>` : "") +
       `</div></div>`;
   }
 
