@@ -21,7 +21,9 @@ git clone <repo> ~/work/localflow
 
 - **REST with a token** — `lf sync`. Autonomous: cron, hooks, no model, no tokens spent.
   Data Center: Personal Access Token (Bearer), REST v2. Cloud: API token + `jira.email` (Basic auth),
-  REST v3 (`/rest/api/3/search/jql` — Cloud removed the v2 search endpoint).
+  REST v3 (`/rest/api/3/search/jql` — Cloud removed the v2 search endpoint). Attachments on Cloud
+  are fetched from `api.media.atlassian.com` via pre-signed redirects; that host is allowed for
+  downloads only and never receives the token.
 - **Through an AI agent** — `lf import FILE.json`. When an API token is not an option but the
   agent has the Atlassian (Rovo) MCP connector, the agent fetches the issues and hands the JSON
   to `lf`; rendering, diffs, history and notes are identical. The bundled skill tells the agent how.

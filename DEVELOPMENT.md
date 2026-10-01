@@ -8,7 +8,8 @@ Local-only Jira mirror plus personal notes. Runs on a corporate machine: nothing
 - Zero runtime dependencies. No `npm install`; only Node/Bun built-ins.
 - TypeScript with erasable syntax only (no enums, namespaces, parameter properties). No build step.
   Imports use `.ts` extensions; type-only imports use `import type`.
-- Network access lives only in `src/jira/client.ts`: GET only, configured Jira host only.
+- Network access lives only in `src/jira/client.ts`: GET only, configured Jira host only (plus
+  `api.media.atlassian.com` for Cloud attachment downloads, without credentials).
   The only listening socket is `src/serve/server.ts`, bound to `127.0.0.1`, Host-checked,
   mutations gated by the `X-LocalFlow` header. `test/network-guard.test.ts` enforces both — do
   not weaken it. The UI page loads nothing from outside (no CDN, no fonts, CSP `default-src 'self'`).

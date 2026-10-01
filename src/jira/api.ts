@@ -95,8 +95,10 @@ export async function searchIssues(client: JiraClient, jql: string, flavor: Flav
 
 /** One minimal search request — what `lf doctor` uses to prove the search endpoint is alive. */
 export async function probeSearch(client: JiraClient, flavor: Flavor = "datacenter"): Promise<void> {
-  if (flavor === "cloud") await client.getJson("/rest/api/3/search/jql", { jql: "order by updated desc", maxResults: 1, fields: "key" });
-  else await client.getJson(`${base(flavor)}/search`, { jql: "order by updated desc", maxResults: 1, fields: "key" });
+  // Cloud's search/jql rejects unbounded JQL (a bare "order by"), so the probe carries a condition.
+  const params = { jql: "updated >= -30d order by updated desc", maxResults: 1, fields: "id" };
+  if (flavor === "cloud") await client.getJson("/rest/api/3/search/jql", params);
+  else await client.getJson(`${base(flavor)}/search`, params);
 }
 
 /** Returns null when the issue does not exist (deleted or moved). */

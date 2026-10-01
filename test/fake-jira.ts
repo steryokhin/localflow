@@ -64,6 +64,8 @@ export class FakeJira {
   baseUrl = "";
   /** Behave like Jira Cloud: v2 search is gone, Basic auth (any email + the test token) is accepted. */
   cloud = false;
+  /** Where /redirect-media sends the client (a second server in tests). */
+  redirectTarget = "";
   #server: http.Server | null = null;
 
   addAttachment(key: string, id: number, filename: string, content: string): void {
@@ -104,6 +106,11 @@ export class FakeJira {
     const basicOk = this.cloud && auth.startsWith("Basic ") && Buffer.from(auth.slice(6), "base64").toString("utf8").endsWith(`:${TEST_TOKEN}`);
     if (auth !== `Bearer ${TEST_TOKEN}` && !basicOk) return this.#json(res, 401, {});
 
+    if (url.pathname === "/redirect-media") {
+      res.writeHead(302, { location: this.redirectTarget });
+      res.end();
+      return;
+    }
     if (url.pathname === "/redirect-out") {
       res.writeHead(302, { location: "http://example.invalid/stolen" });
       res.end();
