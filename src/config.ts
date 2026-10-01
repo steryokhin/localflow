@@ -36,7 +36,7 @@ export interface Config {
      * connection — every non-loopback request is refused; issues arrive through `lf import`.
      */
     transport: "rest" | "import";
-    /** "datacenter": REST v2, Bearer PAT, wiki markup. "cloud": REST v2, Basic auth (email + API token). */
+    /** "datacenter": REST v2, Bearer PAT, wiki markup. "cloud": REST v3 (search/jql), Basic auth (email + API token), ADF. */
     flavor: "datacenter" | "cloud";
     /** Cloud only: the account email paired with the API token. */
     email?: string;

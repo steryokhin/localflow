@@ -4,7 +4,7 @@ import {
   CONFIG_FILE, DEFAULT_VAULT, INBOX_FILE, PROJECTS_DIR, STATE_DIR,
   defaultConfig, loadConfig, readToken, tokenSource,
 } from "./config.ts";
-import { getMyself } from "./jira/api.ts";
+import { getMyself, probeSearch } from "./jira/api.ts";
 import { ATTACHMENTS_DIR } from "./jira/attachments.ts";
 import { JiraClient } from "./jira/client.ts";
 import { LOCAL_STATUSES } from "./jira/mapping.ts";
@@ -84,8 +84,15 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   }
   if (token && !opts.offline) {
     try {
-      const me = await getMyself(new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent, false));
+      const client = new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent, false);
+      const me = await getMyself(client, config.jira.flavor);
       check(true, "Jira access", `${config.jira.baseUrl} as ${me.displayName} (${me.key || me.accountId || me.name})`);
+      try {
+        await probeSearch(client, config.jira.flavor);
+        check(true, "Jira search", config.jira.flavor === "cloud" ? "/rest/api/3/search/jql" : "/rest/api/2/search");
+      } catch (e) {
+        check(false, "Jira search", `${(e as Error).message.split("\n")[0]} — is jira.flavor right? Cloud needs "cloud" (v3 API)`);
+      }
     } catch (e) {
       check(false, "Jira access", (e as Error).message);
     }
