@@ -378,6 +378,9 @@
       if (this.editable) {
         this.doc.addEventListener("click", (e) => {
           if (e.target.closest("a, input, button")) return;
+          // A drag that selected text is a copy, not a request to edit.
+          const sel = window.getSelection();
+          if (sel && !sel.isCollapsed && sel.toString().length > 0) return;
           const blk = e.target.closest(".blk");
           if (blk && !blk.classList.contains("editing")) this.edit(Number(blk.dataset.i), "end");
         });
