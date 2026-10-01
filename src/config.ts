@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { runSecretCommand } from "./secret.ts";
 import { UserError, expandHome } from "./util.ts";
 
 export const CONFIG_FILE = "localflow.json";
@@ -39,7 +40,14 @@ export interface Config {
     flavor: "datacenter" | "cloud";
     /** Cloud only: the account email paired with the API token. */
     email?: string;
+    /** Plain-text token file, used when tokenCommand is not set. */
     tokenFile: string;
+    /**
+     * Alternative to tokenFile: an argv array whose stdout is the token, e.g.
+     * ["bw", "get", "password", "localflow-jira"]. Run without a shell; stdin/stderr stay on the
+     * terminal so the password manager can prompt. The value is never written or logged.
+     */
+    tokenCommand?: string[];
     userAgent: string;
     maxAttachmentMb: number;
     /** Field names or ids never rendered into ticket.md (noisy fields). */
@@ -133,7 +141,20 @@ export function resolveVault(flag?: string): string {
   return path.resolve(expandHome(DEFAULT_VAULT));
 }
 
+/** Human-readable description of where the token comes from, never the token itself. */
+export function tokenSource(config: Config): string {
+  const cmd = config.jira.tokenCommand;
+  return cmd?.length ? `command: ${cmd.join(" ")}` : `file: ${config.jira.tokenFile}`;
+}
+
 export function readToken(config: Config): string {
+  const cmd = config.jira.tokenCommand;
+  if (cmd !== undefined) {
+    if (!Array.isArray(cmd) || cmd.length === 0 || cmd.some((a) => typeof a !== "string")) {
+      throw new UserError('jira.tokenCommand must be a non-empty array of strings, e.g. ["bw", "get", "password", "localflow-jira"].');
+    }
+    return runSecretCommand(cmd);
+  }
   const file = expandHome(config.jira.tokenFile);
   let token: string;
   try {
@@ -149,8 +170,9 @@ export function readToken(config: Config): string {
   return token;
 }
 
-/** True when the token file is readable by group or others. */
+/** True when the token file is readable by group or others (file-based tokens only). */
 export function tokenFileTooOpen(config: Config): boolean {
+  if (config.jira.tokenCommand) return false;
   try {
     return (fs.statSync(expandHome(config.jira.tokenFile)).mode & 0o077) !== 0;
   } catch {

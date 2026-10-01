@@ -41,6 +41,17 @@ lf sync
 lf seen --all        # the first sync marks everything as new
 ```
 
+Prefer a password manager over a token file: set `jira.tokenCommand` to an argv array whose
+stdout is the token, e.g. `["bw", "get", "password", "localflow-jira"]` (Bitwarden CLI). `lf` runs
+it without a shell, captures only stdout and never prints the value; stdin stays on the terminal so
+the manager can ask for its master password. For runs started by an agent (no terminal), unlock
+first in the shell you start the agent from: `export BW_SESSION=$(bw unlock --raw)`.
+
+On Jira Cloud, create the token as an *API token with scopes* and grant only `read:jira-work` and
+`read:jira-user`: `lf` has no write methods at all (enforced by a test), and a read-only token
+makes that true at Atlassian's end too. Scoped tokens may need `baseUrl` pointed at
+`https://api.atlassian.com/ex/jira/<cloudId>` — `lf doctor` tells you whether access works.
+
 ## The vault
 
 ```
@@ -95,6 +106,7 @@ containing `localflow.json`, then `~/LocalFlow`.
     "transport": "rest",
     "flavor": "datacenter",
     "tokenFile": "~/.config/localflow/jira-token",
+    "tokenCommand": ["bw", "get", "password", "localflow-jira"],
     "userAgent": "localflow/0.1",
     "maxAttachmentMb": 25,
     "ignoreFields": ["Rank", "Development", "Last Viewed"],

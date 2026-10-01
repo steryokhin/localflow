@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   CONFIG_FILE, DEFAULT_VAULT, INBOX_FILE, PROJECTS_DIR, STATE_DIR,
-  defaultConfig, loadConfig, readToken, tokenFileTooOpen,
+  defaultConfig, loadConfig, readToken, tokenFileTooOpen, tokenSource,
 } from "./config.ts";
 import { getMyself } from "./jira/api.ts";
 import { ATTACHMENTS_DIR } from "./jira/attachments.ts";
@@ -78,9 +78,9 @@ export async function cmdDoctor(vault: string, opts: { offline?: boolean }): Pro
   let token = "";
   try {
     token = readToken(config);
-    check(!tokenFileTooOpen(config), "token file permissions", tokenFileTooOpen(config) ? `run: chmod 600 ${config.jira.tokenFile}` : config.jira.tokenFile);
+    check(!tokenFileTooOpen(config), "token", tokenFileTooOpen(config) ? `run: chmod 600 ${config.jira.tokenFile}` : tokenSource(config));
   } catch (e) {
-    check(false, "token file", (e as Error).message.split("\n")[0]);
+    check(false, "token", (e as Error).message.split("\n")[0]);
   }
   if (token && !opts.offline) {
     try {

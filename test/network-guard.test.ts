@@ -45,8 +45,14 @@ test("the web UI server listens on the loopback interface only", () => {
   assert.deepEqual(filesMatching(/\.listen\(/), ["serve/server.ts"]);
 });
 
-test("processes are spawned only for git and for opening the editor", () => {
-  assert.deepEqual(filesMatching(/node:child_process/), ["open.ts", "vault/git.ts"]);
+test("processes are spawned only for git, the editor and the token command", () => {
+  assert.deepEqual(filesMatching(/node:child_process/), ["open.ts", "secret.ts", "vault/git.ts"]);
+});
+
+test("the token command runs without a shell and never captures more than stdout", () => {
+  const secret = fs.readFileSync(path.join(SRC, "secret.ts"), "utf8");
+  assert.doesNotMatch(secret, /shell\s*:\s*true|execSync|exec\(/);
+  assert.match(secret, /stdio: \["inherit", "pipe", "inherit"\]/);
 });
 
 test("the Jira client contains no write methods", () => {

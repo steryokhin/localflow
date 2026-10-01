@@ -41,6 +41,10 @@ the only way in. Both end in the same render, diff and commit.
 ```
 lf sync            # one commit per sync, with a change summary
 ```
+The token is read by `lf` itself (a file, or `jira.tokenCommand` such as the Bitwarden CLI).
+Never fetch, print or paste the token yourself — it must not enter this conversation. If
+`lf doctor` reports the token command failed (locked vault, no `BW_SESSION`), ask the user to
+unlock their password manager in the shell they started you from and retry; do not work around it.
 
 **B. Through the Atlassian (Rovo) MCP connector**, when there is no API token but the connector
 is available to you. You fetch, `lf` does the rest:
