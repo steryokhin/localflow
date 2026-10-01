@@ -45,6 +45,6 @@ Optional — session log for \`lf report\` (add to ~/.claude/settings.json, not 
 
 Next:
   lf init ~/LocalFlow --jira-url https://<jira-host> --project <KEY> --local-prefix WORK
-  mkdir -p ~/.config/localflow && printf '%s' 'TOKEN' > ~/.config/localflow/jira-token && chmod 600 ~/.config/localflow/jira-token
+  # store the read-only Jira token in your password manager; localflow.json's jira.tokenCommand fetches it (default: bw get password localflow-jira)
   lf doctor
 EOF
