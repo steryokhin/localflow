@@ -1,13 +1,17 @@
 // The ONLY module allowed to touch the network (enforced by test/network-guard.test.ts).
 // Guarantees:
 //   - GET requests only: there is no code path that writes to Jira;
-//   - every request, including each redirect hop, must target the configured Jira origin;
+//   - every request, including each redirect hop, must target the configured Jira origin, or one
+//     of the extra hosts the caller allows (Cloud serves attachments from api.media.atlassian.com);
+//     credentials are sent to the Jira origin only, never to an extra host;
 //   - plain http is accepted for loopback only (tests);
 //   - with `loopbackOnly` (transport "import") no connection ever leaves the machine.
 
 import { UserError } from "../util.ts";
 
 const MAX_REDIRECTS = 5;
+/** Where Jira Cloud redirects attachment downloads (pre-signed URLs, no credentials needed). */
+export const CLOUD_MEDIA_HOSTS = ["api.media.atlassian.com"];
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export class JiraHttpError extends Error {
@@ -34,8 +38,9 @@ export class JiraClient {
   readonly #authorization: string;
   readonly #userAgent: string;
   readonly #loopbackOnly: boolean;
+  readonly #extraHosts: Set<string>;
 
-  constructor(baseUrl: string, auth: JiraAuth, userAgent: string, loopbackOnly = false) {
+  constructor(baseUrl: string, auth: JiraAuth, userAgent: string, loopbackOnly = false, extraHosts: string[] = []) {
     let origin: URL;
     try {
       origin = new URL(baseUrl);
@@ -53,6 +58,7 @@ export class JiraClient {
       );
     }
     this.origin = origin;
+    this.#extraHosts = new Set(loopbackOnly ? [] : extraHosts);
     if (auth.kind === "basic") {
       if (!auth.email) throw new UserError("Jira Cloud needs jira.email in localflow.json (paired with the API token).");
       this.#authorization = "Basic " + Buffer.from(`${auth.email}:${auth.token}`).toString("base64");
@@ -66,9 +72,14 @@ export class JiraClient {
     if (this.#loopbackOnly && !isLoopback(url.hostname)) {
       throw new Error(`Refusing request to ${url.origin}: transport is "import", loopback only`);
     }
-    if (url.protocol !== this.origin.protocol || url.host !== this.origin.host) {
-      throw new Error(`Refusing request to ${url.origin}: only ${this.origin.origin} is allowed`);
-    }
+    if (url.protocol === this.origin.protocol && url.host === this.origin.host) return;
+    if ((url.protocol === "https:" || isLoopback(url.hostname)) && this.#extraHosts.has(url.host)) return;
+    const allowed = [this.origin.origin, ...[...this.#extraHosts].map((h) => `https://${h}`)].join(", ");
+    throw new Error(`Refusing request to ${url.origin}: only ${allowed} is allowed`);
+  }
+
+  #isOrigin(url: URL): boolean {
+    return url.protocol === this.origin.protocol && url.host === this.origin.host;
   }
 
   async #get(url: URL, accept: string, timeoutMs: number): Promise<Response> {
@@ -81,7 +92,8 @@ export class JiraClient {
           method: "GET",
           redirect: "manual",
           headers: {
-            Authorization: this.#authorization,
+            // Extra hosts get pre-signed URLs from Jira; the token never travels there.
+            ...(this.#isOrigin(current) ? { Authorization: this.#authorization } : {}),
             Accept: accept,
             "User-Agent": this.#userAgent,
             "X-Atlassian-Token": "no-check",

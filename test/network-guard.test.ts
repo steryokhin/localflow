@@ -89,3 +89,32 @@ test("import transport refuses any non-loopback host outright", () => {
 test("client rejects a non-https base URL for non-loopback hosts", () => {
   assert.throws(() => new JiraClient("http://jira.example.com", { kind: "bearer", token: TEST_TOKEN }, "test"), /must be https/);
 });
+
+test("an extra host (Cloud media) is reachable via redirect, without the Jira credentials", async () => {
+  const http = await import("node:http");
+  const seen: Array<string | undefined> = [];
+  const media = http.createServer((req, res) => {
+    seen.push(req.headers.authorization);
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    res.end("MEDIA-BYTES");
+  });
+  await new Promise<void>((r) => media.listen(0, "127.0.0.1", r));
+  const mediaHost = `127.0.0.1:${(media.address() as { port: number }).port}`;
+  try {
+    const client = new JiraClient(jira.baseUrl, { kind: "bearer", token: TEST_TOKEN }, "test", false, [mediaHost]);
+    jira.redirectTarget = `http://${mediaHost}/file.png`;
+    const bytes = Buffer.from(await client.download(`${jira.baseUrl}/redirect-media`));
+    assert.equal(bytes.toString(), "MEDIA-BYTES");
+    assert.deepEqual(seen, [undefined]);
+    // Without the allowance the same redirect is refused.
+    const strict = new JiraClient(jira.baseUrl, { kind: "bearer", token: TEST_TOKEN }, "test");
+    await assert.rejects(strict.download(`${jira.baseUrl}/redirect-media`), /only .* is allowed/);
+    // Import mode ignores extra hosts entirely.
+    assert.throws(
+      () => new JiraClient("https://example.atlassian.net", { kind: "basic", token: "t", email: "e@x" }, "test", true, ["api.media.atlassian.com"]),
+      /opens no outbound connections/,
+    );
+  } finally {
+    media.close();
+  }
+});

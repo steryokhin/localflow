@@ -4,7 +4,7 @@ import type { Config } from "../config.ts";
 import { readToken } from "../config.ts";
 import { ensureAllComments, getIssuesByKeys, getMyself, searchIssues } from "../jira/api.ts";
 import type { JiraIssue } from "../jira/api.ts";
-import { JiraClient } from "../jira/client.ts";
+import { CLOUD_MEDIA_HOSTS, JiraClient } from "../jira/client.ts";
 import type { JiraAuth } from "../jira/client.ts";
 import { UserError } from "../util.ts";
 import { assertLocalOnly } from "../vault/git.ts";
@@ -62,7 +62,8 @@ export async function runSync(vault: string, config: Config, opts: SyncOptions =
         'or set jira.transport to "rest" to allow REST access.',
     );
   }
-  const client = new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent);
+  const extraHosts = config.jira.flavor === "cloud" ? CLOUD_MEDIA_HOSTS : [];
+  const client = new JiraClient(config.jira.baseUrl, jiraAuth(config), config.jira.userAgent, false, extraHosts);
   const warnings: string[] = [];
 
   const flavor = config.jira.flavor;
