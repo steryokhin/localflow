@@ -11,6 +11,7 @@ import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
 import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox } from "./render/inbox.ts";
 import { renderReport } from "./report.ts";
+import { startServer } from "./serve/server.ts";
 import { runImport } from "./sync/import.ts";
 import { jiraAuth, runSync } from "./sync/run.ts";
 import type { SyncOptions, SyncReport } from "./sync/run.ts";
@@ -269,4 +270,19 @@ export function cmdCreate(vault: string, prefix: string, title: string, opts: { 
   writeFileAtomic(path.join(dir, NOTES_FILE), notesStub(key, "inbox"));
   refreshInbox(vault);
   out(`${key}  ${dir}`);
+}
+
+export async function cmdServe(vault: string, opts: { port?: number; open?: boolean }): Promise<void> {
+  const server = await startServer(vault, { port: opts.port, log: out });
+  const { port } = server.address() as { port: number };
+  out("Press Ctrl+C to stop.");
+  if (opts.open) openInEditor(`http://127.0.0.1:${port}/`);
+  await new Promise<void>((resolve) => {
+    const stop = (): void => {
+      server.close();
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
 }

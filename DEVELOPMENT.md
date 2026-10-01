@@ -9,10 +9,12 @@ Local-only Jira mirror plus personal notes. Runs on a corporate machine: nothing
 - TypeScript with erasable syntax only (no enums, namespaces, parameter properties). No build step.
   Imports use `.ts` extensions; type-only imports use `import type`.
 - Network access lives only in `src/jira/client.ts`: GET only, configured Jira host only.
-  `test/network-guard.test.ts` enforces this — do not weaken it.
+  The only listening socket is `src/serve/server.ts`, bound to `127.0.0.1`, Host-checked,
+  mutations gated by the `X-LocalFlow` header. `test/network-guard.test.ts` enforces both — do
+  not weaken it. The UI page loads nothing from outside (no CDN, no fonts, CSP `default-src 'self'`).
 - Sync is one-way (Jira -> local). Never add code that writes to Jira.
 - With `jira.transport: "import"` lf must open no outbound connection at all (`JiraClient` refuses
-  non-loopback hosts). Anything that listens (the future web UI, MCP over HTTP) binds 127.0.0.1 only.
+  non-loopback hosts). Anything that listens (web UI, a future MCP over HTTP) binds 127.0.0.1 only.
 - Sync owns only `ticket.md`, `attachments/`, `raw/` inside a ticket folder. It must never modify
   user files (`notes.md` and anything else) after creating the initial `notes.md` stub.
 - `ticket.md` rendering must be deterministic: it is tracked in git and every changed byte reads
@@ -31,5 +33,5 @@ Local-only Jira mirror plus personal notes. Runs on a corporate machine: nothing
 ## Roadmap
 
 1. Sync + CLI (done in `lflow-001-mvp-sync`).
-2. Local web UI: `lf serve` on 127.0.0.1, no external resources.
+2. Local web UI: `lf serve` (done in `lflow-005-web-ui`; design in `docs/design-web-ui.md`).
 3. MCP stdio server: `lf mcp`, hand-written JSON-RPC, Jira mirror read-only for agents.
