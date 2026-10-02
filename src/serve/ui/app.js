@@ -1,5 +1,6 @@
 // Local Flow web UI. Vanilla JS, talks to the JSON API in ../server.ts. Four panes:
-// nav (filters) · ticket list · ticket folder · content (Jira mirror, history, or the editor).
+// nav (groups, status filters, notes) · ticket list (a tree) · ticket folder · content (Jira mirror,
+// history, or the editor).
 // The editor is a Notion-style live preview: blocks render as HTML, the block being edited
 // shows its raw Markdown in a textarea.
 
@@ -14,7 +15,13 @@
   const STATUS_LABELS = { inbox: "Inbox", inprogress: "In progress", inreview: "In review", done: "Done", archived: "Archived" };
   const NAV_STATUSES = ["inbox", "inprogress", "inreview", "done"];
   const OPEN_STATUSES = ["inbox", "inprogress", "inreview"];
-  const FILTER_KEY = "lf.filter";
+  // "open" = inbox + inprogress + inreview, "all" = everything but archived, "status:X" = one status.
+  const FILTER_KEY = "lf.status";
+  // The selected group is the master context: "" means All, otherwise a group name.
+  const GROUP_KEY = "lf.group";
+  // Keys of tickets whose children are folded away in the list.
+  const COLLAPSED_KEY = "lf.collapsed";
+  const TICKET_DRAG = "application/x-localflow-ticket";
 
   const ICON = {
     logo: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h7M2 8h12M2 12.5h9" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
@@ -43,20 +50,41 @@
   }
 
   let toastTimer = 0;
-  function toast(message, ok) {
+  function toast(message, ok, ms) {
     const el = $("toast");
     el.textContent = message;
     el.className = "toast" + (ok ? " ok" : "");
     el.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; }, ok ? 1800 : 5000);
+    toastTimer = setTimeout(() => { el.hidden = true; }, ms || (ok ? 1800 : 5000));
+  }
+
+  function store(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+  function readList(key) {
+    try {
+      const v = JSON.parse(store(key) || "[]");
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    } catch { return []; }
+  }
+  function save(key, value) {
+    try { localStorage.setItem(key, value); } catch { /* private mode: the choice just does not persist */ }
   }
 
   // ---------- state ----------
 
   const state = {
     overview: null,
-    filter: localStorage.getItem(FILTER_KEY) || "all",
+    filter: /^(open|all|status:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
+    group: store(GROUP_KEY) || "",
+    collapsed: new Set(readList(COLLAPSED_KEY)),
+    confirmGroup: null, // group whose "Delete? Yes/No" is showing
+    dragKey: null,      // ticket being dragged
+    dropEl: null,       // element currently highlighted as a drop target
+    pending: false,     // a live refresh was skipped because a drag or an inline input is active
+    syncKey: null,      // ticket whose sync is running
+    pendingEdit: null,  // file to open straight in edit mode
     query: "",
     route: { kind: "none" },
     ticket: null,   // TicketView of the selected ticket
@@ -112,13 +140,22 @@
     return label;
   }
 
-  function visibleTickets() {
+  const isOpen = (t) => OPEN_STATUSES.includes(t.status);
+
+  /** Tickets of the current group (all of them when the group is All). */
+  function groupTickets() {
     const all = state.overview.tickets;
-    const f = state.filter;
-    let rows;
-    if (f.startsWith("status:")) rows = all.filter((t) => t.status === f.slice(7));
-    else if (f.startsWith("project:")) rows = all.filter((t) => t.project === f.slice(8) && t.status !== "archived");
-    else rows = all.filter((t) => OPEN_STATUSES.includes(t.status));
+    return state.group ? all.filter((t) => t.group === state.group) : all;
+  }
+
+  function byFilter(rows, f) {
+    if (f.startsWith("status:")) return rows.filter((t) => t.status === f.slice(7));
+    if (f === "all") return rows.filter((t) => t.status !== "archived");
+    return rows.filter(isOpen);
+  }
+
+  function visibleTickets() {
+    let rows = byFilter(groupTickets(), state.filter);
     const q = state.query.trim().toLowerCase();
     if (q) rows = rows.filter((t) => `${t.key} ${t.title} ${t.assignee}`.toLowerCase().includes(q));
     return rows;
@@ -126,37 +163,80 @@
 
   function filterTitle() {
     const f = state.filter;
-    if (f.startsWith("status:")) return STATUS_LABELS[f.slice(7)] || f.slice(7);
-    if (f.startsWith("project:")) return f.slice(8);
-    return "All open";
+    const what = f.startsWith("status:") ? STATUS_LABELS[f.slice(7)] || f.slice(7) : f === "open" ? "Open" : "";
+    return (state.group || "All") + (what ? ` · ${what}` : "");
+  }
+
+  /** A group that no longer exists (deleted, or its last ticket moved away) falls back to All. */
+  function normalizeGroup() {
+    if (state.group && !state.overview.groups.some((g) => g.name === state.group)) {
+      state.group = "";
+      save(GROUP_KEY, "");
+    }
+  }
+
+  /**
+   * Rows as a flat list of tree nodes. A child whose parent is not among the rows (missing from the
+   * vault, other group, filtered out) is a root, so no ticket is ever hidden by its parent.
+   */
+  function buildTree(rows) {
+    const keys = new Set(rows.map((r) => r.key));
+    const kids = new Map();
+    const roots = [];
+    for (const r of rows) {
+      if (r.parent && r.parent !== r.key && keys.has(r.parent)) {
+        if (!kids.has(r.parent)) kids.set(r.parent, []);
+        kids.get(r.parent).push(r);
+      } else roots.push(r);
+    }
+    const out = [];
+    const seen = new Set();
+    const walk = (r, depth, hidden) => {
+      if (seen.has(r.key)) return;
+      seen.add(r.key);
+      const ch = kids.get(r.key) || [];
+      const folded = state.collapsed.has(r.key);
+      if (!hidden) out.push({ row: r, depth, kids: ch.length, folded });
+      for (const c of ch) walk(c, depth + 1, hidden || folded);
+    };
+    for (const r of roots) walk(r, 0, false);
+    // Rows left over sit in a hand-made parent cycle: show them at the root.
+    for (const r of rows) walk(r, 0, false);
+    return out;
   }
 
   // ---------- pane 1: nav ----------
 
   function renderNav() {
     const o = state.overview;
-    const tickets = o.tickets;
-    const count = (pred) => tickets.filter(pred);
+    const all = o.tickets;
+    const scoped = groupTickets();
     const unreadOf = (rows) => rows.reduce((n, t) => n + (t.unread ? 1 : 0), 0);
-    const item = (key, ico, label, rows, extra) => {
-      const u = rows ? unreadOf(rows) : 0;
-      return `<button class="nl${state.filter === key ? " on" : ""}${extra ? " " + extra : ""}" data-filter="${esc(key)}">` +
-        (ico ? `<span class="ico">${ico}</span>` : "") + esc(label) +
-        (rows ? `<span class="n">${rows.length}</span>` : "") +
-        (u ? `<span class="u" title="${u} unread">${u}</span>` : "") + "</button>";
+    const badges = (open, unread) =>
+      `<span class="n">${open}</span>` + (unread ? `<span class="u" title="${unread} unread">${unread}</span>` : "");
+    const item = (key, ico, label, rows) =>
+      `<button class="nl${state.filter === key ? " on" : ""}" data-filter="${esc(key)}"><span class="ico">${ico}</span>${esc(label)}${badges(rows.length, unreadOf(rows))}</button>`;
+    const groupRow = (name, label, open, unread, removable) => {
+      const on = state.group === name;
+      if (name && state.confirmGroup === name) {
+        return `<div class="nl grp on" data-group="${esc(name)}"><span class="gn">Delete “${esc(name)}”?</span>` +
+          `<span class="yn"><button class="btn" data-gdel="yes">Yes</button><button class="btn ghost" data-gdel="no">No</button></span></div>`;
+      }
+      return `<div class="nl grp${on ? " on" : ""}" role="button" tabindex="0" data-group="${esc(name)}"${name ? " data-drop" : ""}>` +
+        `<span class="ico">${name ? "▦" : "◧"}</span><span class="gn">${esc(label)}</span>${badges(open, unread)}` +
+        (removable ? `<button class="gx" data-gx="${esc(name)}" title="Delete group (tickets stay)" aria-label="Delete group ${esc(name)}">×</button>` : "") + "</div>";
     };
-    const projects = [...new Set(tickets.map((t) => t.project))].sort();
     let h = `<div class="brand">${ICON.logo}Local Flow<span class="sync" title="Last sync">${o.lastSync ? "Synced " + fmtTime(o.lastSync) : ""}</span></div>`;
-    h += item("all", "◧", "All open", count((t) => OPEN_STATUSES.includes(t.status)));
+    h += `<h5>Groups<button class="plus" id="addgroup" title="New group" aria-label="New group">+</button></h5><div id="newgroup"></div>`;
+    h += groupRow("", "All", all.filter(isOpen).length, unreadOf(all), false);
+    for (const g of o.groups) h += groupRow(g.name, g.name, g.open, g.unread, g.removable);
     h += "<h5>Status</h5>";
+    h += item("all", "◧", "All", scoped.filter((t) => t.status !== "archived"));
+    h += item("open", "◨", "All open", scoped.filter(isOpen));
     const marks = { inbox: "○", inprogress: "◐", inreview: "◑", done: "●" };
-    for (const s of NAV_STATUSES) h += item(`status:${s}`, marks[s], STATUS_LABELS[s], count((t) => t.status === s));
-    if (state.filter === "status:archived" || count((t) => t.status === "archived").length) {
-      h += item("status:archived", "◌", "Archived", count((t) => t.status === "archived"));
-    }
-    if (projects.length) {
-      h += "<h5>Projects</h5>";
-      for (const p of projects) h += item(`project:${p}`, "▦", p, count((t) => t.project === p && t.status !== "archived"));
+    for (const s of NAV_STATUSES) h += item(`status:${s}`, marks[s], STATUS_LABELS[s], scoped.filter((t) => t.status === s));
+    if (state.filter === "status:archived" || scoped.some((t) => t.status === "archived")) {
+      h += item("status:archived", "◌", "Archived", scoped.filter((t) => t.status === "archived"));
     }
     h += `<h5>Notes</h5><div class="tree">${renderTree(o.notes, 0)}</div>`;
     h += `<div class="newnote" id="newnote"><button class="btn ghost" id="addnote">+ Note</button></div>`;
@@ -165,18 +245,63 @@
     $("nav").querySelectorAll("[data-filter]").forEach((b) => {
       b.addEventListener("click", () => {
         state.filter = b.dataset.filter;
-        localStorage.setItem(FILTER_KEY, state.filter);
+        save(FILTER_KEY, state.filter);
         renderNav();
         renderList();
       });
     });
+    $("nav").querySelectorAll(".grp[data-group]").forEach((row) => {
+      const pick = () => {
+        state.group = row.dataset.group;
+        state.confirmGroup = null;
+        save(GROUP_KEY, state.group);
+        renderNav();
+        renderList();
+      };
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".gx, [data-gdel]")) return;
+        pick();
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); pick(); }
+      });
+    });
+    $("nav").querySelectorAll(".gx").forEach((b) => b.addEventListener("click", () => {
+      state.confirmGroup = b.dataset.gx;
+      renderNav();
+    }));
+    $("nav").querySelectorAll("[data-gdel]").forEach((b) => b.addEventListener("click", async () => {
+      const name = state.confirmGroup;
+      state.confirmGroup = null;
+      if (b.dataset.gdel === "yes" && name) {
+        try {
+          await api("POST", "/api/group/delete", { name });
+          if (state.group === name) { state.group = ""; save(GROUP_KEY, ""); }
+          await loadOverview();
+          return;
+        } catch (err) { toast(err.message); }
+      }
+      renderNav();
+    }));
+    $("addgroup").addEventListener("click", () => inlineInput($("newgroup"), {
+      placeholder: "group name",
+      restore: renderNav,
+      onSubmit: async (name) => {
+        await api("POST", "/api/group", { name });
+        await loadOverview();
+      },
+    }));
     $("nav").querySelectorAll("[data-note]").forEach((b) => {
       b.addEventListener("click", () => go(`#/n/${b.dataset.note}`));
     });
-    $("addnote").addEventListener("click", () => inlineInput($("newnote"), "note name", async (name) => {
-      const r = await api("POST", "/api/note", { folder: "", name });
-      await loadOverview();
-      go(`#/n/${r.path}`);
+    $("addnote").addEventListener("click", () => inlineInput($("newnote"), {
+      placeholder: "note name",
+      restore: renderNav,
+      onSubmit: async (name) => {
+        const r = await api("POST", "/api/note", { folder: "", name });
+        await loadOverview();
+        go(`#/n/${r.path}`);
+      },
     }));
   }
 
@@ -195,19 +320,47 @@
     return h;
   }
 
-  /** Replaces a container's content with a text input; Enter submits, Escape restores. */
-  function inlineInput(container, placeholder, onSubmit) {
-    const old = container.innerHTML;
-    container.innerHTML = `<input type="text" class="sel" style="width:100%" placeholder="${esc(placeholder)}">`;
+  /** True while a drag or an inline input is active: live refresh must not redraw under it. */
+  function busy() {
+    return !!state.dragKey || !!document.querySelector("input.inl");
+  }
+
+  /** Runs the redraw that was postponed while busy(). */
+  function flushPending() {
+    if (state.pending && !busy()) { state.pending = false; refresh(); }
+  }
+
+  /**
+   * Replaces a container's content with a text input. Enter submits (a failure shows a toast and
+   * keeps the input open), Escape or leaving it empty calls opts.restore to redraw the container.
+   */
+  function inlineInput(container, opts) {
+    container.innerHTML = `<input type="text" class="inl" placeholder="${esc(opts.placeholder)}" value="${esc(opts.value || "")}">`;
     const input = container.querySelector("input");
-    const restore = () => { container.innerHTML = old; renderNav(); };
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      opts.restore();
+      flushPending();
+    };
     input.addEventListener("keydown", async (e) => {
-      if (e.key === "Escape") restore();
-      if (e.key === "Enter" && input.value.trim()) {
-        try { await onSubmit(input.value.trim()); } catch (err) { toast(err.message); restore(); }
+      if (e.key === "Escape") { e.preventDefault(); close(); return; }
+      if (e.key !== "Enter" || !input.value.trim() || input.disabled) return;
+      input.disabled = true;
+      try {
+        await opts.onSubmit(input.value.trim());
+        closed = true;
+        flushPending();
+      } catch (err) {
+        toast(err.message);
+        input.disabled = false;
+        input.focus();
       }
     });
+    input.addEventListener("blur", () => { if (!input.value.trim() && !input.disabled) close(); });
     input.focus();
+    if (opts.select) input.setSelectionRange(0, opts.select);
   }
 
   // ---------- pane 2: list ----------
@@ -215,16 +368,24 @@
   function renderList() {
     const rows = visibleTickets();
     const selected = state.route.kind === "ticket" ? state.route.key : null;
+    // Search results stay flat; otherwise the list is a tree under the manual `parent:` links.
+    const flat = !!state.query.trim();
+    const nodes = flat ? rows.map((row) => ({ row, depth: 0, kids: 0, folded: false })) : buildTree(rows);
+    const treeMode = !flat && rows.some((t) => t.parent);
     let h = `<div class="lh"><div class="t">${esc(filterTitle())}<span>${rows.length} ticket${rows.length === 1 ? "" : "s"}</span></div>` +
-      `<div class="search">${ICON.mag}<input id="q" type="search" placeholder="Search key, title, person" value="${esc(state.query)}"><kbd>⌘K</kbd></div></div><div class="scroll">`;
+      `<div class="search">${ICON.mag}<input id="q" type="search" placeholder="Search key, title, person" value="${esc(state.query)}"><kbd>⌘K</kbd></div></div><div class="scroll" id="listscroll">`;
     if (!rows.length) h += `<div class="empty">Nothing here.</div>`;
-    for (const t of rows) {
-      h += `<button class="li${t.key === selected ? " on" : ""}" data-key="${esc(t.key)}">` +
-        `<div class="r1"><span class="key">${esc(t.key)}</span>${prioChip(t.priority)}</div>` +
+    for (const { row: t, depth, kids, folded } of nodes) {
+      const chev = !treeMode ? "" : kids
+        ? `<span class="chev" data-toggle="${esc(t.key)}" title="${folded ? "Expand" : "Collapse"}">${folded ? "▸" : "▾"}</span>`
+        : `<span class="chev sp"></span>`;
+      h += `<div class="li${t.key === selected ? " on" : ""}" role="button" tabindex="0" draggable="true" data-key="${esc(t.key)}" style="padding-left:${14 + depth * 16}px">` +
+        `<div class="r1">${chev}<span class="key">${esc(t.key)}</span>${prioChip(t.priority)}${folded ? `<span class="kids" title="${kids} nested">${kids}</span>` : ""}</div>` +
         (t.unread ? `<span class="dot" title="${t.unread} unread change${t.unread === 1 ? "" : "s"}"></span>` : "<span></span>") +
         `<div class="ti">${esc(t.title)}</div>` +
-        `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}</div></button>`;
+        `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}</div></div>`;
     }
+    h += `<div class="unnest">Drop here to un-nest</div>`;
     $("list").innerHTML = h + "</div>";
     const q = $("q");
     q.addEventListener("input", () => {
@@ -235,7 +396,102 @@
       nq.focus();
       nq.setSelectionRange(pos, pos);
     });
-    $("list").querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", () => go(`#/t/${b.dataset.key}`)));
+    $("list").querySelectorAll("[data-key]").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        const toggle = e.target.closest("[data-toggle]");
+        if (toggle) {
+          const k = toggle.dataset.toggle;
+          if (state.collapsed.has(k)) state.collapsed.delete(k); else state.collapsed.add(k);
+          save(COLLAPSED_KEY, JSON.stringify([...state.collapsed]));
+          keepScroll($("listscroll"), renderList);
+          return;
+        }
+        go(`#/t/${b.dataset.key}`);
+      });
+      b.addEventListener("keydown", (e) => {
+        if (e.target === b && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(`#/t/${b.dataset.key}`); }
+      });
+    });
+  }
+
+  // ---------- drag & drop ----------
+  // A ticket row can be dropped on another row (nest it), on the empty part of the list or the
+  // "un-nest" strip (clear its parent), or on a group in the nav (move it there). One set of
+  // delegated listeners on the panes, so redrawing the lists never loses them.
+
+  function setDrop(el) {
+    if (state.dropEl === el) return;
+    if (state.dropEl) state.dropEl.classList.remove("drop");
+    state.dropEl = el;
+    if (el) el.classList.add("drop");
+  }
+
+  function endDrag() {
+    state.dragKey = null;
+    setDrop(null);
+    $("list").classList.remove("dragging");
+    document.querySelectorAll(".li.dragging").forEach((el) => el.classList.remove("dragging"));
+    flushPending();
+  }
+
+  /** The element a drop would land on, or null when the drop is not allowed. */
+  function dropTarget(e) {
+    if (!state.dragKey) return null;
+    const row = e.target.closest(".li");
+    if (row) return row.dataset.key !== state.dragKey ? row : null;
+    const group = e.target.closest("[data-drop]");
+    if (group) return group;
+    const scroll = e.target.closest("#listscroll");
+    return scroll || null;
+  }
+
+  async function dropTicket(key, el) {
+    try {
+      const me = state.overview.tickets.find((t) => t.key === key);
+      if (el.matches(".li")) {
+        if (me && me.parent !== el.dataset.key) await api("POST", "/api/ticket-parent", { key, parent: el.dataset.key });
+      } else if (el.matches("[data-drop]")) {
+        if (me && me.group !== el.dataset.group) await api("POST", "/api/ticket-group", { key, group: el.dataset.group });
+      } else if (me && me.parent) {
+        await api("POST", "/api/ticket-parent", { key, parent: null });
+      }
+      await loadOverview();
+    } catch (err) { toast(err.message); }
+  }
+
+  function initDragAndDrop() {
+    const list = $("list");
+    list.addEventListener("dragstart", (e) => {
+      const row = e.target.closest ? e.target.closest(".li") : null;
+      if (!row) return;
+      state.dragKey = row.dataset.key;
+      e.dataTransfer.setData(TICKET_DRAG, state.dragKey);
+      e.dataTransfer.setData("text/plain", state.dragKey);
+      e.dataTransfer.effectAllowed = "move";
+      // Class changes right in dragstart can cancel the drag in some browsers: defer them.
+      setTimeout(() => { row.classList.add("dragging"); list.classList.add("dragging"); }, 0);
+    });
+    for (const pane of [list, $("nav")]) {
+      pane.addEventListener("dragover", (e) => {
+        const el = dropTarget(e);
+        if (!el) { setDrop(null); return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDrop(el);
+      });
+      pane.addEventListener("dragleave", (e) => {
+        if (!pane.contains(e.relatedTarget)) setDrop(null);
+      });
+      pane.addEventListener("drop", (e) => {
+        const el = dropTarget(e);
+        if (!el) return;
+        e.preventDefault();
+        const key = state.dragKey;
+        endDrag();
+        if (key) dropTicket(key, el);
+      });
+    }
+    document.addEventListener("dragend", endDrag);
   }
 
   // ---------- pane 3: folder ----------
@@ -251,26 +507,25 @@
       const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(f);
       h += `<button class="fi${r.item === "file" && r.file === f ? " on" : ""}" data-file="${esc(f)}"><span class="ft">${isImg ? ICON.img : ICON.md}</span><span class="nm">${esc(f)}</span></button>`;
     }
-    h += `</div><div class="foot" id="newfile"><button class="fi add"><span class="ft">+</span><span class="nm">New file</span></button></div>`;
+    h += `</div><div class="foot" id="newfile"><button class="fi add"><span class="ft">+</span><span class="nm">File</span></button></div>`;
     $("folder").innerHTML = h;
     $("folder").querySelector('[data-item="task"]').addEventListener("click", () => go(`#/t/${t.row.key}`));
     $("folder").querySelector('[data-item="history"]').addEventListener("click", () => go(`#/t/${t.row.key}/history`));
     $("folder").querySelectorAll("[data-file]").forEach((b) => b.addEventListener("click", () => go(`#/t/${t.row.key}/f/${b.dataset.file}`)));
     $("newfile").querySelector("button").addEventListener("click", () => {
-      const box = $("newfile");
-      box.innerHTML = `<input type="text" placeholder="file name (.md)">`;
-      const input = box.querySelector("input");
-      input.addEventListener("keydown", async (e) => {
-        if (e.key === "Escape") renderFolder();
-        if (e.key === "Enter" && input.value.trim()) {
-          try {
-            const res = await api("POST", "/api/ticket-file", { key: t.row.key, name: input.value.trim() });
-            state.ticket = await api("GET", `/api/ticket/${t.row.key}`);
-            go(`#/t/${t.row.key}/f/${res.path.split("/").pop()}`);
-          } catch (err) { toast(err.message); renderFolder(); }
-        }
+      const stem = `note-${new Date().toLocaleDateString("sv-SE")}`;
+      inlineInput($("newfile"), {
+        placeholder: "file name (.md)",
+        value: `${stem}.md`,
+        select: stem.length,
+        restore: renderFolder,
+        onSubmit: async (name) => {
+          const res = await api("POST", "/api/ticket-file", { key: t.row.key, name });
+          state.ticket = await api("GET", `/api/ticket/${t.row.key}`);
+          state.pendingEdit = res.path;
+          go(`#/t/${t.row.key}/f/${res.path.split("/").pop()}`);
+        },
       });
-      input.focus();
     });
   }
 
@@ -283,6 +538,32 @@
     return `<div class="since">${ICON.spark}<span class="t"><b>${t.unread.length} new${since}:</b> ${esc(summary)}</span><button class="btn" id="seen">Mark seen</button></div>`;
   }
 
+  const syncLabel = (busy) => (busy ? '<span class="spin"></span>Syncing…' : "Sync");
+
+  /** Fetches one ticket from Jira (the server runs the sync in process); the change feed redraws the page. */
+  async function syncNow(key) {
+    if (state.syncKey) return;
+    state.syncKey = key;
+    const paint = () => {
+      const b = $("syncbtn");
+      if (!b) return;
+      b.disabled = !!state.syncKey;
+      b.classList.toggle("busy", state.syncKey === key);
+      b.innerHTML = syncLabel(state.syncKey === key);
+    };
+    paint();
+    try {
+      const r = await api("POST", "/api/sync", { key });
+      const warn = r.warnings.length ? ` (${r.warnings.join("; ")})` : "";
+      toast(r.result === "updated" ? `${key} updated: ${r.events.join(", ") || "re-rendered"}${warn}` : `${key} unchanged${warn}`, true, 4000);
+    } catch (err) {
+      toast(err.message, false, 9000);
+    } finally {
+      state.syncKey = null;
+      paint();
+    }
+  }
+
   function ticketHeader(t) {
     const r = t.row;
     const statusOpts = state.overview.statuses.map((s) => `<option value="${s}"${s === r.status ? " selected" : ""}>${STATUS_LABELS[s] || s}</option>`).join("");
@@ -293,6 +574,7 @@
       `<span class="f">${jiraChip(r)}${r.ahead ? `<span class="jira-hint">Jira is ahead of you</span>` : ""}</span>` +
       (r.priority ? `<span class="f">${prioChip(r.priority)}</span>` : "") +
       (r.assignee ? `<span class="f">${esc(r.mine ? "You" : r.assignee)}</span>` : "") +
+      (r.source === "jira" && state.overview.canSync ? `<button class="btn sync${state.syncKey === r.key ? " busy" : ""}" id="syncbtn" title="Fetch this ticket from Jira now (read-only)"${state.syncKey ? " disabled" : ""}>${syncLabel(state.syncKey === r.key)}</button>` : "") +
       (safeUrl(t.fm.jira_url) ? `<a class="ext" href="${safeUrl(t.fm.jira_url)}" target="_blank" rel="noopener">Open in Jira ↗</a>` : "") +
       `</div></div>`;
   }
@@ -305,6 +587,8 @@
         await reloadTicket();
       } catch (err) { toast(err.message); }
     });
+    const syncBtn = $("syncbtn");
+    if (syncBtn) syncBtn.addEventListener("click", () => syncNow(t.row.key));
     const seen = $("seen");
     if (seen) seen.addEventListener("click", async () => {
       try {
@@ -601,6 +885,14 @@
     }
     state.editor = new Editor(view, { title, props: propsStrip(view) });
     wireProps(view);
+    // A file just made with "+ File" opens ready to type under its heading.
+    if (state.pendingEdit === rel && state.editor.editable) {
+      state.pendingEdit = null;
+      const ed = state.editor;
+      ed.setEditing(true);
+      if (ed.blocks[ed.blocks.length - 1].src.trim()) { ed.blocks.push({ src: "", html: "" }); ed.repaint(); }
+      ed.edit(ed.blocks.length - 1, "end");
+    }
   }
 
   // ---------- routing ----------
@@ -626,7 +918,7 @@
       const parts = r.rel.split("/");
       return openFile(r.rel, `${esc(parts.slice(0, -1).join(" / "))} / <b>${esc(parts[parts.length - 1])}</b>`);
     }
-    $("content").innerHTML = `<div class="empty">Pick a ticket on the left, or a note below the projects.</div>`;
+    $("content").innerHTML = `<div class="empty">Pick a ticket on the left, or a note below the groups.</div>`;
   }
 
   async function onRoute() {
@@ -649,6 +941,7 @@
 
   async function loadOverview() {
     state.overview = await api("GET", "/api/overview");
+    normalizeGroup();
     renderNav();
     renderList();
   }
@@ -680,9 +973,13 @@
   }
 
   async function refresh() {
+    // A drag or an inline input in progress must not be redrawn away: catch up when it ends.
+    if (busy()) { state.pending = true; return; }
     const q = $("q");
     const search = q && document.activeElement === q ? { pos: q.selectionStart } : null;
     try { state.overview = await api("GET", "/api/overview"); } catch (err) { toast(err.message); return; }
+    if (busy()) { state.pending = true; return; }
+    normalizeGroup();
     renderNav();
     keepScroll($("list").querySelector(".scroll"), renderList);
     if (search) { const nq = $("q"); nq.focus(); nq.setSelectionRange(search.pos, search.pos); }
@@ -702,6 +999,7 @@
       let fresh;
       try { fresh = await api("GET", `/api/ticket/${r.key}`); } catch { return; }
       const changed = JSON.stringify(fresh) !== JSON.stringify(state.ticket);
+      if (busy()) { state.pending = true; return; }
       state.ticket = fresh;
       if (changed) keepScroll($("folder").querySelector(".body"), renderFolder);
       if (ed) { if (!ed.editing && !ed.dirty && await ed.changedOnDisk()) await redraw(); }
@@ -724,6 +1022,7 @@
     }
   }
 
+  initDragAndDrop();
   loadOverview()
     .then(onRoute)
     .then(() => { watchChanges(); })
