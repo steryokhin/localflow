@@ -7,6 +7,35 @@ decided: 2026-09-30
 
 # Web UI design — `lf serve`
 
+## РЕШЕНО (2026-10-02) — groups, manual hierarchy, + File, Sync
+
+Decided with the user after using the first version. Extends A′; nothing above is withdrawn
+except "no tree in the list" (point 2) and "Projects" in the nav (point 1).
+
+1. **Groups replace Projects in the nav.** The group of a ticket is `group:` in its `notes.md`;
+   without it, the project prefix — existing tickets appear with zero migration. Groups made by
+   hand live in `groups.json` in the vault root (`{"groups": [...]}`, ordered) so that empty
+   groups can exist; the effective list is that file plus the groups implied by tickets.
+   Deleting a group removes it from the file and clears `group:` from its tickets (they fall
+   back to the prefix); it never deletes a ticket.
+2. **Group = master context.** Nav: *Groups* (*All* first, then each group with open/unread
+   counts), then *Status* (*All*, *All open*, the statuses). The selected group is persistent
+   (localStorage) and scopes the list and the status counts; status filters apply inside it.
+3. **Manual hierarchy.** `parent: KEY` in `notes.md`, set only by the user (drag & drop); never
+   derived from Jira epic/parent links. The list is a tree with fold/unfold chevrons; a child
+   whose parent is absent or filtered out is shown at the root, so a ticket is never hidden by
+   its parent. The server refuses self-parenting and cycles. Search stays flat. Drag onto a
+   ticket = nest, onto empty space or the "drop here to un-nest" strip = clear the parent, onto
+   a group in the nav = move to that group.
+4. **`+ File`** at the end of the folder column: new Markdown file in the ticket folder,
+   opened in edit mode; sync-owned names and `notes.md` are refused.
+5. **Sync button** on Jira tickets: `POST /api/sync {key}` runs the in-process
+   `runSync(..., {keys: [key]})` (same as `lf sync --key`), one at a time (409 otherwise). No
+   child process, still nothing written to Jira. Hidden when `jira.transport` is `import`.
+   The token comes from `tokenCommand`; with Bitwarden it must be unlocked before `lf serve`
+   (`export BW_SESSION=$(bw unlock --raw)`). The sync does not mark the ticket seen, so the
+   "what's new" highlighting keeps working.
+
 ## РЕШЕНО (2026-09-30) — variant A′: four Finder-style panes
 
 Chosen by the user after seeing the mockups: variant **A** with one structural change.
