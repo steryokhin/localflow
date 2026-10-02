@@ -6,7 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { cmdCommit, cmdInit } from "../src/commands.ts";
+import { cmdCommit, cmdCreate, cmdInit } from "../src/commands.ts";
 import { loadConfig } from "../src/config.ts";
 import type { Config } from "../src/config.ts";
 import {
@@ -14,6 +14,8 @@ import {
 } from "../src/serve/api.ts";
 import { startServer } from "../src/serve/server.ts";
 import { runImport } from "../src/sync/import.ts";
+import { runSync } from "../src/sync/run.ts";
+import { FakeJira, TEST_TOKEN, makeIssue } from "./fake-jira.ts";
 import { loadState } from "../src/vault/state.ts";
 import { findTicket } from "../src/vault/store.ts";
 
@@ -383,4 +385,209 @@ test("GET /api/changes answers immediately when behind and after a file change w
   fs.writeFileSync(path.join(vault, "notes", "live.md"), "# live\n");
   const next = await waiting;
   assert.ok(next.version > first.version);
+});
+
+const readNotes = (key: string): string => fs.readFileSync(path.join(findTicket(vault, key)!.dir, "notes.md"), "utf8");
+const groupNames = (): string[] => overview(vault).groups.map((g) => g.name);
+
+test("groups: implied by project prefix, created, listed with counts, moved and deleted without touching tickets", async () => {
+  assert.deepEqual(groupNames(), ["CLD"]);
+  const implied = overview(vault).groups[0];
+  assert.equal(implied.removable, false);
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-7")!.group, "CLD");
+
+  assert.equal((await post("/api/group", { name: "  Review  " })).status, 200);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(vault, "groups.json"), "utf8")), { groups: ["Review"] });
+  // File order first, then groups implied by tickets.
+  assert.deepEqual(groupNames(), ["Review", "CLD"]);
+  const empty = overview(vault).groups.find((g) => g.name === "Review")!;
+  assert.deepEqual([empty.open, empty.unread, empty.removable], [0, 0, true]);
+  assert.equal((await post("/api/group", { name: "Review" })).status, 400, "duplicate");
+  assert.equal((await post("/api/group", { name: "CLD" })).status, 400, "implied group already exists");
+
+  assert.equal((await post("/api/ticket-group", { key: "CLD-7", group: "Review" })).status, 200);
+  assert.match(readNotes("CLD-7"), /^group: Review$/m);
+  const o = overview(vault);
+  assert.equal(o.tickets.find((t) => t.key === "CLD-7")!.group, "Review");
+  const review = o.groups.find((g) => g.name === "Review")!;
+  assert.equal(review.open, 1);
+  assert.ok(review.unread >= 0);
+  assert.equal((await post("/api/ticket-group", { key: "CLD-7", group: "Nope" })).status, 400, "unknown group");
+
+  // Moving back to the project's own group clears the key; null does too.
+  assert.equal((await post("/api/ticket-group", { key: "CLD-7", group: "CLD" })).status, 200);
+  assert.doesNotMatch(readNotes("CLD-7"), /^group:/m);
+  await post("/api/ticket-group", { key: "CLD-7", group: "Review" });
+  assert.equal((await post("/api/ticket-group", { key: "CLD-7", group: null })).status, 200);
+  assert.doesNotMatch(readNotes("CLD-7"), /^group:/m);
+
+  // Deleting a group clears `group:` from its tickets; the tickets stay and fall back to the prefix.
+  await post("/api/ticket-group", { key: "CLD-7", group: "Review" });
+  const before = readNotes("CLD-7");
+  assert.equal((await fetch(`${base}/api/group`, { method: "DELETE", headers: { "x-localflow": "1", "content-type": "application/json" }, body: JSON.stringify({ name: "Review" }) })).status, 200);
+  assert.deepEqual(groupNames(), ["CLD"]);
+  assert.equal(readNotes("CLD-7"), before.replace(/^group: Review\n/m, ""));
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-7")!.group, "CLD");
+  assert.ok(findTicket(vault, "CLD-7"));
+  assert.equal((await post("/api/group/delete", { name: "Review" })).status, 400, "already gone");
+  assert.equal((await post("/api/group/delete", { name: "CLD" })).status, 400, "implied groups cannot be deleted");
+});
+
+test("group names are validated; group/parent cannot be set through the generic frontmatter endpoint", async () => {
+  for (const name of ["", "   ", "x".repeat(65), "a\nb", "a\u0000b", "__proto__", "constructor"]) {
+    assert.equal((await post("/api/group", { name })).status, 400, JSON.stringify(name));
+  }
+  assert.equal((await post("/api/group", {})).status, 400);
+  assert.equal((await post("/api/group", { name: "x".repeat(64) })).status, 200);
+  await post("/api/group/delete", { name: "x".repeat(64) });
+
+  // Names that need YAML quoting survive a round trip through notes.md.
+  assert.equal((await post("/api/group", { name: 'Q3: "big" #1' })).status, 200);
+  assert.equal((await post("/api/ticket-group", { key: "CLD-8", group: 'Q3: "big" #1' })).status, 200);
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-8")!.group, 'Q3: "big" #1');
+  await post("/api/group/delete", { name: 'Q3: "big" #1' });
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-8")!.group, "CLD");
+
+  const rel = `${findTicket(vault, "CLD-8")!.rel}/notes.md`;
+  assert.equal((await post("/api/frontmatter", { path: rel, updates: { group: "X" } })).status, 400);
+  assert.equal((await post("/api/frontmatter", { path: rel, updates: { parent: "CLD-7" } })).status, 400);
+});
+
+test("parent: set, clear, self and cycles are refused, unknown parents are refused", async () => {
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-8", parent: "CLD-7" })).status, 200);
+  assert.match(readNotes("CLD-8"), /^parent: CLD-7$/m);
+  const row8 = overview(vault).tickets.find((t) => t.key === "CLD-8")!;
+  assert.equal(row8.parent, "CLD-7");
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-7")!.parent, null);
+
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-7", parent: "CLD-7" })).status, 400, "self");
+  const cycle = await post("/api/ticket-parent", { key: "CLD-7", parent: "CLD-8" });
+  assert.equal(cycle.status, 400);
+  assert.match(((await cycle.json()) as { error: string }).error, /cycle/);
+  assert.doesNotMatch(readNotes("CLD-7"), /^parent:/m, "nothing written on refusal");
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-8", parent: "CLD-99" })).status, 400, "unknown parent");
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-8", parent: 5 })).status, 400);
+
+  // A longer chain: CLD-7 <- CLD-8 <- CLD-9, then CLD-7 under CLD-9 is a cycle too.
+  await importIssues(cloudIssue("CLD-9"));
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-9", parent: "CLD-8" })).status, 200);
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-7", parent: "CLD-9" })).status, 400);
+
+  // Clearing, and notes.md keeps its other frontmatter and body.
+  assert.equal((await post("/api/ticket-parent", { key: "CLD-8", parent: null })).status, 200);
+  assert.doesNotMatch(readNotes("CLD-8"), /^parent:/m);
+  assert.match(readNotes("CLD-8"), /^status: /m);
+  assert.equal(overview(vault).tickets.find((t) => t.key === "CLD-8")!.parent, null);
+});
+
+test("+ File: new Markdown file in the ticket folder; sync-owned names and notes.md are refused", async () => {
+  const ok = await post("/api/ticket-file", { key: "CLD-7", name: "note-2026-10-02.md" });
+  assert.equal(ok.status, 200);
+  const { path: rel } = (await ok.json()) as { path: string };
+  assert.ok(rel.endsWith("/note-2026-10-02.md"));
+  assert.ok(ticketView(vault, "CLD-7").files.includes("note-2026-10-02.md"));
+  assert.equal(fileView(vault, rel).editable, true);
+  for (const name of ["ticket.md", "ticket", "raw", "attachments", "notes.md", "notes", "NOTES.md"]) {
+    assert.equal((await post("/api/ticket-file", { key: "CLD-7", name })).status, 400, name);
+  }
+  assert.equal((await post("/api/ticket-file", { key: "CLD-7", name: "note-2026-10-02" })).status, 400, "duplicate");
+});
+
+test("overview: canSync follows the transport", () => {
+  assert.equal(overview(vault).canSync, true);
+  const file = path.join(vault, "localflow.json");
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.jira.transport = "import";
+  fs.writeFileSync(file, JSON.stringify(raw));
+  assert.equal(overview(vault).canSync, false);
+  raw.jira.transport = "rest";
+  fs.writeFileSync(file, JSON.stringify(raw));
+  assert.equal(overview(vault).canSync, true);
+});
+
+test("POST /api/sync: 409 while one runs, one at a time, needs X-LocalFlow", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let started!: () => void;
+  const running = new Promise<void>((r) => (started = r));
+  const calls: string[] = [];
+  const held = await startServer(vault, {
+    port: 0,
+    syncRunner: async (_v, key) => {
+      calls.push(key);
+      started();
+      await gate;
+      return { key, result: "unchanged", events: [], warnings: [] };
+    },
+  });
+  try {
+    const heldBase = `http://127.0.0.1:${(held.address() as { port: number }).port}`;
+    const send = (headers: Record<string, string> = { "x-localflow": "1" }) =>
+      fetch(`${heldBase}/api/sync`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ key: "CLD-7" }) });
+    assert.equal((await send({})).status, 403);
+    const first = send();
+    await running;
+    const second = await send();
+    assert.equal(second.status, 409);
+    release();
+    const done = await first;
+    assert.equal(done.status, 200);
+    assert.deepEqual(await done.json(), { key: "CLD-7", result: "unchanged", events: [], warnings: [] });
+    assert.deepEqual(calls, ["CLD-7"]);
+    // The gate is free again.
+    assert.equal((await send()).status, 200);
+  } finally {
+    held.closeAllConnections();
+    await new Promise<void>((r) => held.close(() => r()));
+  }
+});
+
+test("POST /api/sync end to end against the fake Jira; local tickets and failing token commands are reported", async () => {
+  const jira = new FakeJira();
+  await jira.start();
+  const dir = fs.mkdtempSync(path.join(tmp, "sync-"));
+  const v = path.join(dir, "vault");
+  cmdInit(v, { jiraUrl: jira.baseUrl, project: "DEMO", localPrefix: "WORK" });
+  const file = path.join(v, "localflow.json");
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.jira.tokenCommand = ["printf", "%s", TEST_TOKEN];
+  fs.writeFileSync(file, JSON.stringify(raw, null, 2));
+  cmdCommit(v, "config");
+  jira.issues.set("DEMO-1", makeIssue("DEMO-1", { summary: "First" }));
+  await runSync(v, loadConfig(v), { keys: ["DEMO-1"] });
+  cmdCreate(v, "WORK", "Local one", {});
+  const srv = await startServer(v, { port: 0 });
+  const b = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+  const sync = (key: string) =>
+    fetch(`${b}/api/sync`, { method: "POST", headers: { "x-localflow": "1", "content-type": "application/json" }, body: JSON.stringify({ key }) });
+  try {
+    const same = await sync("DEMO-1");
+    assert.equal(same.status, 200);
+    assert.equal(((await same.json()) as { result: string }).result, "unchanged");
+
+    jira.issues.get("DEMO-1")!.fields.summary = "First, renamed";
+    jira.issues.get("DEMO-1")!.fields.updated = "2026-09-05T10:00:00.000+0000";
+    const changed = await sync("DEMO-1");
+    assert.equal(changed.status, 200);
+    const body = (await changed.json()) as { result: string; events: string[] };
+    assert.equal(body.result, "updated");
+    assert.ok(body.events.length > 0);
+    const ov = (await (await fetch(`${b}/api/overview`)).json()) as { tickets: Array<{ key: string; title: string; unread: number }> };
+    assert.equal(ov.tickets.find((t) => t.key === "DEMO-1")!.title, "First, renamed");
+    assert.ok(ov.tickets.find((t) => t.key === "DEMO-1")!.unread > 0, "sync does not mark the ticket seen");
+
+    assert.equal((await sync("WORK-1")).status, 400, "local ticket");
+    assert.equal((await sync("DEMO-99")).status, 400, "unknown ticket");
+
+    // A failing token command is an ordinary error message; the token never shows up in it.
+    raw.jira.tokenCommand = ["false"];
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2));
+    const bad = await sync("DEMO-1");
+    assert.equal(bad.status, 400);
+    assert.match(((await bad.json()) as { error: string }).error, /Token command/);
+  } finally {
+    srv.closeAllConnections();
+    await new Promise<void>((r) => srv.close(() => r()));
+    await jira.stop();
+  }
 });

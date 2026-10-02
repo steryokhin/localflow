@@ -143,3 +143,21 @@ export function setFrontmatterKeys(text: string, updates: Record<string, string 
   }
   return `---\n${lines.join("\n")}\n---\n` + text.slice(m[0].length);
 }
+
+/**
+ * Remove keys (and their block-list items) from a file's frontmatter, leaving every other line
+ * and the body byte-for-byte intact. A file without frontmatter is returned unchanged.
+ */
+export function removeFrontmatterKeys(text: string, keys: string[]): string {
+  const m = FRONTMATTER_RE.exec(text);
+  if (!m) return text;
+  const lines = m[1].split(/\r?\n/);
+  for (const key of keys) {
+    const idx = lines.findIndex((l) => new RegExp(`^${key}\\s*:`).test(l));
+    if (idx === -1) continue;
+    let end = idx + 1;
+    while (end < lines.length && /^\s+-\s+/.test(lines[end])) end++;
+    lines.splice(idx, end - idx);
+  }
+  return `---\n${lines.join("\n")}\n---\n` + text.slice(m[0].length);
+}

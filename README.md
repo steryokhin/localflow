@@ -154,13 +154,38 @@ containing `localflow.json`, then `~/LocalFlow`.
 `lf serve` starts the UI at `http://127.0.0.1:7420/`. It binds the loopback interface only,
 answers only to a `127.0.0.1`/`localhost` Host header, loads no external resources and needs a
 custom header for every change, so no other site can talk to it. Four panes, Finder-style:
-where to look (statuses, projects, plain notes) · the ticket list · the ticket folder (Original
+where to look (groups, statuses, plain notes) · the ticket list · the ticket folder (Original
 Task and History pinned on top, your files below) · the content. The Jira mirror highlights what
 changed since you last marked the ticket seen; History is the ticket's event feed. Your files
 open read-only; *Edit* (or a double-click on a block) switches to a Notion-style editor: the whole
 document stays rendered, the block you click shows its Markdown, leaving it renders it again; ⌘S
 saves, and so does a pause. The page follows the vault: files added or changed by `lf`, an agent
 or your editor appear without a reload, and an open editor is never overwritten.
+
+**Groups.** The first nav section is *Groups*: *All*, then one entry per group with open/unread
+counts. A ticket's group is the `group:` key in its `notes.md`; without it the group is the
+project prefix, so existing tickets show up under `HCOMHOT` or `WORK` with no migration. The `+`
+creates an empty group (kept in `groups.json` in the vault root), the hover `×` deletes it (click,
+then *Yes*): `group:` is cleared from its tickets, which fall back to their prefix; tickets are
+never deleted. The selected group is remembered and scopes both the list and the *Status* counts;
+*Status* has *All* (everything but archived) next to *All open* and the single statuses.
+
+**Hierarchy.** The list is a tree built from `parent: KEY` in `notes.md`, set by hand only (Jira
+epic and parent links are not used). Chevrons fold a branch; a child whose parent is missing or
+filtered out stays visible at the top level. Drag a ticket onto another one to nest it, onto the
+empty part of the list (or the strip that appears while dragging) to un-nest it, or onto a group
+in the nav to move it there. Self-parenting and cycles are refused. Search results stay flat.
+
+**New file.** *+ File* at the bottom of the ticket folder column creates a Markdown file in the
+ticket folder (suggested name `note-YYYY-MM-DD.md`) and opens it for typing. `ticket.md`,
+`attachments`, `raw` and `notes.md` are refused.
+
+**Sync button.** A Jira ticket's header has *Sync*: it fetches just that ticket, in the server
+process, exactly like `lf sync --key KEY` (still read-only towards Jira; one sync at a time). The
+result comes as a toast (`updated` / `unchanged` / the error). What changed stays unread until
+you press *Mark seen*. The token comes from `jira.tokenCommand`, so with Bitwarden unlock it
+before starting the server: `export BW_SESSION=$(bw unlock --raw)`, then `lf serve`. The button
+is hidden when `jira.transport` is `import`.
 
 ## Daily report and session log
 

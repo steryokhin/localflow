@@ -11,15 +11,19 @@ import type { DiffBlock } from "../render/blockdiff.ts";
 import { jiraAhead, priorityOf, refreshInbox } from "../render/inbox.ts";
 import { renderBlock, splitBlocks } from "../render/markdown.ts";
 import { UserError, readTextIfExists, slugify, today, writeFileAtomic } from "../util.ts";
-import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "../vault/frontmatter.ts";
+import { dumpFrontmatter, parseFrontmatter, removeFrontmatterKeys, setFrontmatterKeys } from "../vault/frontmatter.ts";
 import type { Frontmatter } from "../vault/frontmatter.ts";
 import { git, head, log } from "../vault/git.ts";
 import { SYNC_SUBJECT_PREFIX, loadState, saveState, unreadByTicket } from "../vault/state.ts";
 import type { State } from "../vault/state.ts";
-import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, requireTicket } from "../vault/store.ts";
+import { runSync } from "../sync/run.ts";
+import { KEY_ONLY_RE, NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "../vault/store.ts";
 import type { Ticket } from "../vault/store.ts";
 
 export const NOTES_DIR = "notes";
+/** Vault-root file with the groups the user created by hand (so empty groups can exist). */
+export const GROUPS_FILE = "groups.json";
+const OPEN_STATUSES: readonly string[] = ["inbox", "inprogress", "inreview"];
 const EVENT_LINE_RE = /^([A-Z][A-Z0-9_]*-\d+): (.+)$/;
 
 // ---------- paths ----------
@@ -68,6 +72,19 @@ export interface TicketRow {
   mine: boolean;
   unread: number;
   updated: string | null;
+  /** Effective group: `group:` from notes.md, else the project prefix. */
+  group: string;
+  /** Manual parent ticket key from notes.md, or null. */
+  parent: string | null;
+}
+
+export interface GroupInfo {
+  name: string;
+  /** Tickets in the group whose status is open (inbox, inprogress, inreview). */
+  open: number;
+  unread: number;
+  /** True when the user can delete it: listed in groups.json or set explicitly on a ticket. */
+  removable: boolean;
 }
 
 export interface NoteNode {
@@ -84,6 +101,9 @@ export interface Overview {
   notes: NoteNode[];
   statuses: readonly string[];
   localPrefixes: string[];
+  groups: GroupInfo[];
+  /** The Sync button makes sense: REST transport and at least one Jira project. */
+  canSync: boolean;
 }
 
 function row(t: Ticket, config: Config, unread: number): TicketRow {
@@ -102,7 +122,23 @@ function row(t: Ticket, config: Config, unread: number): TicketRow {
     mine: t.fm.mine !== false,
     unread,
     updated: t.fm.updated ? String(t.fm.updated) : null,
+    group: groupOf(t),
+    parent: parentOf(t),
   };
+}
+
+function explicitGroup(t: Ticket): string | null {
+  const g = t.notes.group;
+  return typeof g === "string" && g.trim() ? g : null;
+}
+
+function groupOf(t: Ticket): string {
+  return explicitGroup(t) ?? t.project;
+}
+
+function parentOf(t: Ticket): string | null {
+  const p = t.notes.parent;
+  return typeof p === "string" && KEY_ONLY_RE.test(p.trim().toUpperCase()) ? p.trim().toUpperCase() : null;
 }
 
 function notesTree(vault: string, rel: string): NoteNode[] {
@@ -122,14 +158,126 @@ export function overview(vault: string): Overview {
   const config = loadConfig(vault);
   const state = loadState(vault);
   const unread = unreadByTicket(vault, state);
+  const tickets = listTickets(vault).map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0) }));
   return {
     vault,
     lastSync: state.lastSync,
-    tickets: listTickets(vault).map((t) => row(t, config, unread.get(t.key)?.length ?? 0)),
+    tickets: tickets.map((x) => x.row),
     notes: notesTree(vault, NOTES_DIR),
     statuses: LOCAL_STATUSES,
     localPrefixes: Object.entries(config.projects).filter(([, p]) => p.source === "local").map(([name]) => name),
+    groups: groupList(vault, tickets),
+    canSync: config.jira.transport === "rest" && Object.values(config.projects).some((p) => p.source === "jira"),
   };
+}
+
+// ---------- groups ----------
+
+/** Groups the user created by hand, in their order. A missing or broken file means none. */
+function readGroupsFile(vault: string): string[] {
+  const text = readTextIfExists(path.join(vault, GROUPS_FILE));
+  if (text === null) return [];
+  try {
+    const list = (JSON.parse(text) as { groups?: unknown }).groups;
+    if (!Array.isArray(list)) return [];
+    return [...new Set(list.filter((g): g is string => typeof g === "string" && g.trim() !== ""))];
+  } catch {
+    return [];
+  }
+}
+
+function writeGroupsFile(vault: string, groups: string[]): void {
+  writeFileAtomic(path.join(vault, GROUPS_FILE), JSON.stringify({ groups }, null, 2) + "\n");
+}
+
+/** The file's groups in their order, then the groups implied by tickets, sorted. */
+function groupList(vault: string, tickets: Array<{ t: Ticket; row: TicketRow }>): GroupInfo[] {
+  const listed = readGroupsFile(vault);
+  const explicit = new Set(tickets.map((x) => explicitGroup(x.t)).filter((g): g is string => g !== null));
+  const implied = [...new Set(tickets.map((x) => x.row.group))].filter((g) => !listed.includes(g)).sort();
+  return [...listed, ...implied].map((name) => {
+    const rows = tickets.filter((x) => x.row.group === name).map((x) => x.row);
+    return {
+      name,
+      open: rows.filter((r) => OPEN_STATUSES.includes(r.status)).length,
+      unread: rows.reduce((n, r) => n + (r.unread ? 1 : 0), 0),
+      removable: listed.includes(name) || explicit.has(name),
+    };
+  });
+}
+
+/** Trimmed group name, or a UserError. Names end up in frontmatter and JSON, so keep them plain. */
+export function cleanGroupName(raw: string): string {
+  const name = raw.trim();
+  if (!name) throw new UserError("Group name is empty.");
+  if (name.length > 64) throw new UserError("Group name is longer than 64 characters.");
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw new UserError("Group name has control characters.");
+  if (["__proto__", "constructor", "prototype"].includes(name)) throw new UserError(`"${name}" is not a valid group name.`);
+  return name;
+}
+
+export function createGroup(vault: string, rawName: string): void {
+  const name = cleanGroupName(rawName);
+  const current = overview(vault).groups;
+  if (current.some((g) => g.name === name)) throw new UserError(`Group "${name}" already exists.`);
+  writeGroupsFile(vault, [...readGroupsFile(vault), name]);
+}
+
+/** Removes the group from groups.json and clears `group:` from its tickets. Never deletes a ticket. */
+export function deleteGroup(vault: string, rawName: string): void {
+  const name = cleanGroupName(rawName);
+  const listed = readGroupsFile(vault);
+  const members = listTickets(vault).filter((t) => explicitGroup(t) === name);
+  if (!listed.includes(name) && !members.length) throw new UserError(`Group "${name}" cannot be deleted.`);
+  for (const t of members) {
+    const notesPath = path.join(t.dir, NOTES_FILE);
+    const text = readTextIfExists(notesPath);
+    if (text !== null) writeFileAtomic(notesPath, removeFrontmatterKeys(text, ["group"]));
+  }
+  writeGroupsFile(vault, listed.filter((g) => g !== name));
+}
+
+/** Writes keys into a ticket's notes.md (creating the stub when missing); null removes a key. */
+function updateNotes(t: Ticket, updates: Record<string, string | null>): void {
+  const notesPath = path.join(t.dir, NOTES_FILE);
+  let text = readTextIfExists(notesPath);
+  const set: Record<string, string> = {};
+  const unset: string[] = [];
+  for (const [k, v] of Object.entries(updates)) {
+    if (v === null) unset.push(k);
+    else set[k] = v;
+  }
+  if (text === null) {
+    if (!Object.keys(set).length) return;
+    text = notesStub(t.key, t.status);
+  }
+  if (Object.keys(set).length) text = setFrontmatterKeys(text, set);
+  if (unset.length) text = removeFrontmatterKeys(text, unset);
+  writeFileAtomic(notesPath, text);
+}
+
+/** Moves a ticket to a group (null, or the ticket's own project, clears `group:`). */
+export function setTicketGroup(vault: string, rawKey: string, rawGroup: string | null): void {
+  const t = requireTicket(vault, rawKey);
+  if (rawGroup === null) return updateNotes(t, { group: null });
+  const name = cleanGroupName(rawGroup);
+  if (!overview(vault).groups.some((g) => g.name === name)) throw new UserError(`No such group: ${name}`);
+  updateNotes(t, { group: name === t.project ? null : name });
+}
+
+/** Nests a ticket under another one (null clears it). Self-parenting and cycles are refused. */
+export function setTicketParent(vault: string, rawKey: string, rawParent: string | null): void {
+  const t = requireTicket(vault, rawKey);
+  if (rawParent === null) return updateNotes(t, { parent: null });
+  const parent = requireTicket(vault, rawParent);
+  if (parent.key === t.key) throw new UserError("A ticket cannot be its own parent.");
+  const byKey = new Map(listTickets(vault).map((x) => [x.key, x]));
+  const seen = new Set<string>();
+  for (let cur: string | null = parent.key; cur && !seen.has(cur); cur = byKey.has(cur) ? parentOf(byKey.get(cur)!) : null) {
+    if (cur === t.key) throw new UserError(`${parent.key} is already below ${t.key}: that would make a cycle.`);
+    seen.add(cur);
+  }
+  updateNotes(t, { parent: parent.key });
 }
 
 // ---------- ticket ----------
@@ -303,6 +451,9 @@ export function setFrontmatter(vault: string, rawRel: string, updates: Record<st
   const file = path.join(vault, rel);
   const text = readTextIfExists(file);
   if (text === null) throw new UserError(`No such file: ${rel}`);
+  if (updates.group !== undefined || updates.parent !== undefined) {
+    throw new UserError("Change group and parent through the group and hierarchy controls.");
+  }
   if (updates.status !== undefined && !(LOCAL_STATUSES as readonly string[]).includes(updates.status)) {
     throw new UserError(`Unknown status "${updates.status}".`);
   }
@@ -322,6 +473,7 @@ export function createTicketFile(vault: string, rawKey: string, rawName: string)
   const t = requireTicket(vault, rawKey);
   const name = cleanName(rawName);
   if (SYNC_OWNED.includes(name) || SYNC_OWNED.includes(`${name}.md`)) throw new UserError(`"${name}" is reserved for the sync.`);
+  if (`${name}.md`.toLowerCase() === NOTES_FILE) throw new UserError(`${NOTES_FILE} already exists: it is the ticket's own notes.`);
   const file = path.join(t.dir, `${name}.md`);
   if (fs.existsSync(file)) throw new UserError(`${name}.md already exists.`);
   writeFileAtomic(file, dumpFrontmatter({ ticket: t.key, type: "Note", created: today() }) + `\n# ${t.key} — ${rawName.trim().replace(/\.md$/i, "")}\n\n`);
@@ -352,4 +504,35 @@ export function rawFilePath(vault: string, rawRel: string): string | null {
   const abs = path.join(vault, rel);
   if (!abs.startsWith(vault + path.sep)) return null;
   return fs.existsSync(abs) && fs.statSync(abs).isFile() ? abs : null;
+}
+
+// ---------- sync ----------
+
+export interface SyncResult {
+  key: string;
+  /** "updated" when the ticket changed, "unchanged" otherwise. */
+  result: "updated" | "unchanged";
+  events: string[];
+  warnings: string[];
+}
+
+/** Hint appended when the token command is the Bitwarden CLI and it failed (usually a locked vault). */
+const BW_HINT = "Bitwarden locked? Run `export BW_SESSION=$(bw unlock --raw)` before `lf serve`.";
+
+/** One-ticket sync, in process: the same call `lf sync --key` makes. Jira tickets only. */
+export async function syncTicket(vault: string, rawKey: string): Promise<SyncResult> {
+  const t = requireTicket(vault, rawKey);
+  if (t.source !== "jira") throw new UserError(`${t.key} is a local ticket: there is nothing to sync.`);
+  const config = loadConfig(vault);
+  let report;
+  try {
+    report = await runSync(vault, config, { keys: [t.key] });
+  } catch (e) {
+    const cmd = config.jira.tokenCommand;
+    if (e instanceof UserError && e.message.startsWith("Token command") && cmd?.[0] === "bw") throw new UserError(`${e.message} ${BW_HINT}`);
+    throw e;
+  }
+  const action = report.actions.find((a) => a.key === t.key);
+  const updated = !!action && action.kind !== "skip";
+  return { key: t.key, result: updated ? "updated" : "unchanged", events: action?.events ?? [], warnings: report.warnings };
 }

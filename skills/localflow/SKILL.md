@@ -19,7 +19,9 @@ vault's git repository is local and has no remote. Full command list: `lf help`.
    inside the vault.
 3. **Ticket folder** `projects/<PREFIX>/<KEY>-slug/`:
    - `ticket.md`, `attachments/`, `raw/` — owned by the sync. **Never edit them.**
-   - `notes.md` — the user's status and main note. Edited by the user and by you.
+   - `notes.md` — the user's status and main note. Edited by the user and by you. Its frontmatter
+     also carries the user's `group:` (UI grouping; defaults to the project prefix) and
+     `parent: KEY` (manual nesting in the UI list). Set by the web UI; leave them alone unless asked.
    - any other `*.md`, diagrams, scripts — yours and the user's; the sync never touches them.
 4. **Path to a ticket:** `lf path KEY`. From there use Read/Write/Edit on the files, not `cat`.
 

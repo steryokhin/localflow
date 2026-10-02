@@ -8,9 +8,10 @@ import path from "node:path";
 import { UserError } from "../util.ts";
 import { assertLocalOnly } from "../vault/git.ts";
 import {
-  createNote, createTicketFile, fileView, markSeen, overview, rawFilePath, renderOne, saveFile,
-  setFrontmatter, setStatus, ticketHistory, ticketView,
+  createGroup, createNote, createTicketFile, deleteGroup, fileView, markSeen, overview, rawFilePath, renderOne, saveFile,
+  setFrontmatter, setStatus, setTicketGroup, setTicketParent, syncTicket, ticketHistory, ticketView,
 } from "./api.ts";
+import type { SyncResult } from "./api.ts";
 import { loadState } from "../vault/state.ts";
 
 export const LOOPBACK_HOST = "127.0.0.1";
@@ -41,6 +42,8 @@ const RAW_MIME: Record<string, string> = {
 export interface ServeOptions {
   port?: number;
   log?: (line: string) => void;
+  /** Replaces the in-process sync (tests only: lets a sync be held open). */
+  syncRunner?: (vault: string, key: string) => Promise<SyncResult>;
 }
 
 class HttpError extends Error {
@@ -136,6 +139,17 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
   let port = opts.port ?? DEFAULT_PORT;
   const say = opts.log ?? (() => {});
   const changes = new ChangeFeed(vault, say);
+  // One sync at a time per server: a second request while one runs gets 409.
+  let syncing = false;
+  const runSyncOnce = async (key: string): Promise<SyncResult> => {
+    if (syncing) throw new HttpError(409, "A sync is already running.");
+    syncing = true;
+    try {
+      return await (opts.syncRunner ?? syncTicket)(vault, key);
+    } finally {
+      syncing = false;
+    }
+  };
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -156,7 +170,7 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
           const since = Number(url.searchParams.get("since") ?? 0);
           return json(res, 200, { version: await changes.wait(Number.isFinite(since) ? since : 0, 25_000) });
         }
-        return json(res, 200, await api(vault, method, url, method === "GET" ? {} : parseJson(await readBody(req))));
+        return json(res, 200, await api(vault, method, url, method === "GET" ? {} : parseJson(await readBody(req)), runSyncOnce));
       }
       if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "Method not allowed");
       if (url.pathname.startsWith("/raw/")) return serveRaw(res, rawFilePath(vault, decodeURIComponent(url.pathname.slice(5))));
@@ -219,7 +233,17 @@ function str(body: Record<string, unknown>, key: string, required = true): strin
   return "";
 }
 
-async function api(vault: string, method: string, url: URL, body: Record<string, unknown>): Promise<unknown> {
+/** A string, or null when the key is absent or null (clears the value). */
+function strOrNull(body: Record<string, unknown>, key: string): string | null {
+  const v = body[key];
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string") return v;
+  throw new HttpError(400, `"${key}" must be a string or null`);
+}
+
+async function api(
+  vault: string, method: string, url: URL, body: Record<string, unknown>, sync: (key: string) => Promise<SyncResult>,
+): Promise<unknown> {
   const p = url.pathname;
   const route = `${method} ${p}`;
   if (route === "GET /api/overview") return overview(vault);
@@ -250,6 +274,23 @@ async function api(vault: string, method: string, url: URL, body: Record<string,
     return { ok: true };
   }
   if (route === "POST /api/ticket-file") return { path: createTicketFile(vault, str(body, "key"), str(body, "name")) };
+  if (route === "POST /api/group") {
+    createGroup(vault, str(body, "name"));
+    return { ok: true };
+  }
+  if (route === "POST /api/group/delete" || route === "DELETE /api/group") {
+    deleteGroup(vault, str(body, "name"));
+    return { ok: true };
+  }
+  if (route === "POST /api/ticket-group") {
+    setTicketGroup(vault, str(body, "key"), strOrNull(body, "group"));
+    return { ok: true };
+  }
+  if (route === "POST /api/ticket-parent") {
+    setTicketParent(vault, str(body, "key"), strOrNull(body, "parent"));
+    return { ok: true };
+  }
+  if (route === "POST /api/sync") return sync(str(body, "key"));
   if (route === "POST /api/note") return { path: createNote(vault, str(body, "folder", false), str(body, "name")) };
   throw new HttpError(404, `No such API: ${route}`);
 }
