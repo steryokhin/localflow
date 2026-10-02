@@ -469,7 +469,12 @@
       e.dataTransfer.setData("text/plain", state.dragKey);
       e.dataTransfer.effectAllowed = "move";
       // Class changes right in dragstart can cancel the drag in some browsers: defer them.
-      setTimeout(() => { row.classList.add("dragging"); list.classList.add("dragging"); }, 0);
+      const key = state.dragKey;
+      setTimeout(() => {
+        if (state.dragKey !== key) return; // the drag already ended
+        row.classList.add("dragging");
+        list.classList.add("dragging");
+      }, 0);
     });
     for (const pane of [list, $("nav")]) {
       pane.addEventListener("dragover", (e) => {
