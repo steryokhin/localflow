@@ -24,6 +24,15 @@
   // Linked folders (absolute paths) whose file lists are folded away in the folder pane.
   const LINKED_COLLAPSED_KEY = "lf.linkedCollapsed";
   const TICKET_DRAG = "application/x-localflow-ticket";
+  // Pane widths set by dragging the handles between columns: { nav, list, folder } in px.
+  const WIDTHS_KEY = "lf.widths";
+  const PANES = [
+    { id: "nav", prop: "--w-nav", min: 150 },
+    { id: "list", prop: "--w-list", min: 220 },
+    { id: "folder", prop: "--w-folder", min: 170 },
+  ];
+  // The content pane never gets narrower than this by dragging.
+  const CONTENT_MIN = 360;
 
   const ICON = {
     logo: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h7M2 8h12M2 12.5h9" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
@@ -966,6 +975,126 @@
     }
   }
 
+  // ---------- table of contents ----------
+  // Built from the headings of whatever document the content pane shows (Jira mirror or a file),
+  // and rebuilt when its blocks change (editing, live refresh).
+
+  let tocObserver = null;
+
+  function attachToc() {
+    if (tocObserver) { tocObserver.disconnect(); tocObserver = null; }
+    const scroll = $("content").querySelector(".scroll");
+    const root = scroll && scroll.querySelector(":scope > .mirror, :scope > .doc");
+    if (!root) return;
+    let timer = 0;
+    const build = () => {
+      const old = scroll.querySelector(":scope > .toc");
+      if (old) old.remove();
+      const heads = [...root.querySelectorAll(".md h1, .md h2, .md h3, .md h4")].filter((h) => h.textContent.trim());
+      scroll.classList.toggle("hastoc", heads.length >= 2);
+      if (heads.length < 2) return;
+      const base = Math.min(...heads.map((h) => Number(h.tagName[1])));
+      const nav = document.createElement("nav");
+      nav.className = "toc";
+      nav.setAttribute("aria-label", "Contents");
+      nav.innerHTML = "<h6>Contents</h6>" + heads.map((h, i) =>
+        `<button data-h="${i}" style="padding-left:${8 + (Number(h.tagName[1]) - base) * 12}px" title="${esc(h.textContent.trim())}">${esc(h.textContent.trim())}</button>`).join("");
+      nav.querySelectorAll("[data-h]").forEach((b) => b.addEventListener("click", () => {
+        const h = heads[Number(b.dataset.h)];
+        scroll.scrollTo({ top: scroll.scrollTop + h.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 12, behavior: "smooth" });
+      }));
+      scroll.appendChild(nav);
+      const mark = () => {
+        const top = scroll.getBoundingClientRect().top + 24;
+        let cur = 0;
+        heads.forEach((h, i) => { if (h.getBoundingClientRect().top <= top) cur = i; });
+        nav.querySelectorAll("[data-h]").forEach((b) => b.classList.toggle("on", Number(b.dataset.h) === cur));
+      };
+      scroll.onscroll = mark;
+      mark();
+    };
+    build();
+    tocObserver = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(build, 150); });
+    tocObserver.observe(root, { childList: true, subtree: true });
+  }
+
+  // ---------- resizable columns ----------
+  // A handle sits on the right edge of each of the first three panes. Dragging sets the pane's
+  // --w-* width (never below its minimum, and never squeezing the content pane below CONTENT_MIN);
+  // a double-click returns it to the default. Widths are remembered per browser.
+
+  function readWidths() {
+    try {
+      const v = JSON.parse(store(WIDTHS_KEY) || "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch { return {}; }
+  }
+
+  function applyWidths() {
+    const w = readWidths();
+    for (const p of PANES) {
+      if (Number.isFinite(w[p.id]) && w[p.id] >= p.min) $("app").style.setProperty(p.prop, `${Math.round(w[p.id])}px`);
+      else $("app").style.removeProperty(p.prop);
+    }
+  }
+
+  function placeHandles() {
+    const left = $("app").getBoundingClientRect().left;
+    for (const p of PANES) {
+      const h = $("app").querySelector(`.rz[data-pane="${p.id}"]`);
+      if (!h) continue;
+      const pane = $(p.id);
+      h.hidden = pane.hidden;
+      if (!pane.hidden) h.style.left = `${pane.getBoundingClientRect().right - left}px`;
+    }
+  }
+
+  function initResize() {
+    applyWidths();
+    for (const p of PANES) {
+      const h = document.createElement("div");
+      h.className = "rz";
+      h.dataset.pane = p.id;
+      h.title = "Drag to resize · double-click to reset";
+      $("app").appendChild(h);
+      h.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        h.setPointerCapture(e.pointerId);
+        const startX = e.clientX;
+        const startW = $(p.id).getBoundingClientRect().width;
+        const max = Math.max(startW, startW + $("content").getBoundingClientRect().width - CONTENT_MIN);
+        let w = startW;
+        h.classList.add("on");
+        document.body.classList.add("resizing");
+        const move = (ev) => {
+          w = Math.min(max, Math.max(p.min, startW + ev.clientX - startX));
+          $("app").style.setProperty(p.prop, `${Math.round(w)}px`);
+          placeHandles();
+        };
+        const up = () => {
+          h.removeEventListener("pointermove", move);
+          h.removeEventListener("pointerup", up);
+          h.removeEventListener("pointercancel", up);
+          h.classList.remove("on");
+          document.body.classList.remove("resizing");
+          save(WIDTHS_KEY, JSON.stringify({ ...readWidths(), [p.id]: Math.round(w) }));
+        };
+        h.addEventListener("pointermove", move);
+        h.addEventListener("pointerup", up);
+        h.addEventListener("pointercancel", up);
+      });
+      h.addEventListener("dblclick", () => {
+        const w = readWidths();
+        delete w[p.id];
+        save(WIDTHS_KEY, JSON.stringify(w));
+        applyWidths();
+        placeHandles();
+      });
+    }
+    placeHandles();
+    window.addEventListener("resize", placeHandles);
+  }
+
   // ---------- routing ----------
 
   function closeEditor() {
@@ -973,6 +1102,11 @@
   }
 
   async function renderContent() {
+    await renderContentPane();
+    attachToc();
+  }
+
+  async function renderContentPane() {
     closeEditor();
     const r = state.route;
     if (r.kind === "ticket") {
@@ -1009,6 +1143,7 @@
     const showFolder = state.route.kind === "ticket";
     $("folder").hidden = !showFolder;
     $("app").classList.toggle("nofolder", !showFolder);
+    placeHandles();
     renderNav();
     renderList();
     if (showFolder) renderFolder();
@@ -1099,6 +1234,7 @@
   }
 
   initDragAndDrop();
+  initResize();
   loadOverview()
     .then(onRoute)
     .then(() => { watchChanges(); })
