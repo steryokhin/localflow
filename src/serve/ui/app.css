@@ -50,12 +50,18 @@ button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 a { color: var(--accent); }
 
-.app { display: grid; grid-template-columns: 212px 318px 222px 1fr; height: 100vh; min-height: 0; }
-.app.nofolder { grid-template-columns: 212px 318px 1fr; }
+/* Column widths come from --w-* (set by dragging the handles between panes, see app.js). */
+.app { position: relative; display: grid; grid-template-columns: var(--w-nav, 212px) var(--w-list, 318px) var(--w-folder, 222px) minmax(0, 1fr); height: 100vh; min-height: 0; }
+.app.nofolder { grid-template-columns: var(--w-nav, 212px) var(--w-list, 318px) minmax(0, 1fr); }
 @media (max-width: 1100px) {
-  .app { grid-template-columns: 180px 260px 190px 1fr; }
-  .app.nofolder { grid-template-columns: 180px 260px 1fr; }
+  .app { grid-template-columns: var(--w-nav, 180px) var(--w-list, 260px) var(--w-folder, 190px) minmax(0, 1fr); }
+  .app.nofolder { grid-template-columns: var(--w-nav, 180px) var(--w-list, 260px) minmax(0, 1fr); }
 }
+.rz { position: absolute; top: 0; bottom: 0; width: 9px; margin-left: -5px; cursor: col-resize; z-index: 5; touch-action: none; }
+.rz::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 2px; background: transparent; transition: background .12s; }
+.rz:hover::after, .rz.on::after { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .app > :not(.rz) { pointer-events: none; }
 
 /* ---------- shared tokens ---------- */
 .key { font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
@@ -271,3 +277,14 @@ input.sel { background-image: none; padding-right: 8px; width: 120px; font-varia
 /* toast */
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--err-bg); color: var(--del); border: 1px solid color-mix(in srgb, var(--del) 40%, transparent); border-radius: 8px; padding: 8px 14px; font-size: 12.5px; max-width: 70vw; box-shadow: 0 8px 24px rgba(0, 0, 0, .15); z-index: 10; }
 .toast.ok { background: var(--js-done-bg); color: var(--js-done); border-color: color-mix(in srgb, var(--js-done) 40%, transparent); }
+
+/* ---------- table of contents (right of the document) ---------- */
+.ct { container-type: inline-size; }
+.scroll.hastoc { display: flex; align-items: flex-start; }
+.scroll.hastoc > .mirror, .scroll.hastoc > .doc { flex: 1 1 auto; min-width: 0; }
+.toc { position: sticky; top: 0; flex: none; width: 210px; margin-left: auto; max-height: calc(100vh - 60px); overflow: auto; padding: 18px 14px 24px 6px; font-size: 12px; }
+.toc h6 { margin: 0 0 6px 10px; font-size: 11px; font-weight: 600; color: var(--faint); }
+.toc button { display: block; width: 100%; text-align: left; border: 0; border-left: 2px solid var(--line); background: none; padding: 3px 8px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toc button:hover { color: var(--text); }
+.toc button.on { color: var(--accent); border-left-color: var(--accent); font-weight: 550; }
+@container (max-width: 600px) { .toc { display: none; } }
