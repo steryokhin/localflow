@@ -19,6 +19,8 @@ import type { State } from "../vault/state.ts";
 import { runSync } from "../sync/run.ts";
 import { KEY_ONLY_RE, NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "../vault/store.ts";
 import type { Ticket } from "../vault/store.ts";
+import { LINKED_KEY, readLinkedFile, readLinkedFolders } from "../vault/links.ts";
+import type { LinkedFolder } from "../vault/links.ts";
 
 export const NOTES_DIR = "notes";
 /** Vault-root file with the groups the user created by hand (so empty groups can exist). */
@@ -320,6 +322,8 @@ export interface TicketView {
   fm: Frontmatter;
   notes: Frontmatter;
   files: string[];
+  /** Folders outside the vault from `linked_folders:` in notes.md, listed fresh on every call. */
+  linked: LinkedFolder[];
   blocks: RenderedBlock[];
   unread: HistoryEvent[];
   seenDate: string | null;
@@ -374,6 +378,7 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     fm: t.fm,
     notes: t.notes,
     files,
+    linked: readLinkedFolders(t.notes),
     blocks,
     unread,
     seenDate: seenCommit?.date ?? null,
@@ -431,6 +436,21 @@ export function fileView(vault: string, rawRel: string): FileView {
   };
 }
 
+/** A file from one of the ticket's linked folders, in the same shape as fileView; never editable here. */
+export function linkedFileView(vault: string, rawKey: string, file: string): FileView {
+  const text = readLinkedFile(vault, rawKey, file);
+  const m = FM_RE.exec(text);
+  const body = m ? text.slice(m[0].length) : text;
+  return {
+    rel: file,
+    editable: false,
+    fm: parseFrontmatter(text).data,
+    // Relative links point outside the vault, which /raw does not serve: leave them as written.
+    blocks: splitBlocks(body).map((src) => ({ src, html: renderBlock(src) })),
+    head: m ? m[0] : "",
+  };
+}
+
 export function renderOne(src: string, rel: string): string {
   const safe = safeRel(rel);
   const resolveUrl = safe.startsWith(`${PROJECTS_DIR}/`) ? ticketUrlResolver(safe.split("/").slice(0, 3).join("/")) : undefined;
@@ -454,6 +474,7 @@ export function setFrontmatter(vault: string, rawRel: string, updates: Record<st
   if (updates.group !== undefined || updates.parent !== undefined) {
     throw new UserError("Change group and parent through the group and hierarchy controls.");
   }
+  if (updates[LINKED_KEY] !== undefined) throw new UserError("Link and unlink folders with the folder controls (or `lf link`).");
   if (updates.status !== undefined && !(LOCAL_STATUSES as readonly string[]).includes(updates.status)) {
     throw new UserError(`Unknown status "${updates.status}".`);
   }

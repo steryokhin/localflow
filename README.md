@@ -89,6 +89,7 @@ sync; when Jira has moved further than your status, `lf ls` points it out.
 | `lf ls [--status S] [--mine] [--project P] [--unread] [--all]` | the board in the terminal |
 | `lf start KEY` / `lf status KEY <status>` | your workflow status |
 | `lf note KEY NAME` | a new note file in the ticket folder |
+| `lf link KEY PATH` / `lf unlink KEY PATH` | link a folder outside the vault to a ticket (shown in the web UI) |
 | `lf create PREFIX "title"` | a local ticket of your own |
 | `lf open [KEY]` / `lf path KEY` | open in your editor / print the folder path |
 | `lf commit [-m MSG]` | commit your own files (notes) to the vault's local git |
@@ -179,6 +180,17 @@ in the nav to move it there. Self-parenting and cycles are refused. Search resul
 **New file.** *+ File* at the bottom of the ticket folder column creates a Markdown file in the
 ticket folder (suggested name `note-YYYY-MM-DD.md`) and opens it for typing. `ticket.md`,
 `attachments`, `raw` and `notes.md` are refused.
+
+**Linked folders.** `linked_folders:` in `notes.md` is a list of absolute paths of folders
+outside the vault (a code repo's `docs/`, a design folder) that belong to the ticket. Set it with
+`lf link KEY PATH` / `lf unlink KEY PATH` or *+ Link folder* / the hover `×` in the ticket folder
+column; the path must be an existing folder, and the last unlink removes the key. Each linked
+folder is a foldable section (marked *linked*) under the ticket's own files, listing its
+immediate files, read fresh every time. Local Flow does not manage these folders: it only lists
+and reads them (no writes, no git). A click opens the file read-only in the same viewer. Only files directly inside a linked folder are
+served (no hidden files, no symlinks leading elsewhere, no binaries, up to 2 MB); relative images
+in them are not shown. Changes made only inside a linked folder are picked up on the next redraw,
+not live.
 
 **Sync button.** A Jira ticket's header has *Sync*: it fetches just that ticket, in the server
 process, exactly like `lf sync --key KEY` (still read-only towards Jira; one sync at a time). The

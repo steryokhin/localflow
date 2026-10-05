@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import {
-  cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLs, cmdNote, cmdOpen, cmdPath,
-  cmdImport, cmdReport, cmdSeen, cmdServe, cmdStart, cmdStatus, cmdSync,
+  cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLink, cmdLs, cmdNote, cmdOpen, cmdPath,
+  cmdImport, cmdReport, cmdSeen, cmdServe, cmdStart, cmdStatus, cmdSync, cmdUnlink,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
 import { UserError } from "./util.ts";
@@ -33,6 +33,8 @@ Work
   start KEY                       status -> inprogress
   status KEY <inbox|inprogress|inreview|done|archived>
   note KEY NAME                   new note file in the ticket folder
+  link KEY PATH                   link a folder outside the vault (shown in the ticket's web UI view)
+  unlink KEY PATH                 remove a linked folder
   create PREFIX "title" [--type T] [--priority P2]    local ticket
   open [KEY]                      open the ticket folder (or the vault) in your editor
   path KEY                        print the ticket folder path
@@ -181,6 +183,15 @@ async function main(argv: string[]): Promise<number> {
       const { values, positionals } = parse(rest, {});
       const usage = "lf note KEY NAME";
       cmdNote(resolveVault(values.vault as string | undefined), need(positionals[0], usage), need(positionals[1], usage));
+      return 0;
+    }
+
+    case "link":
+    case "unlink": {
+      const { values, positionals } = parse(rest, {});
+      const usage = `lf ${command} KEY PATH`;
+      const run = command === "link" ? cmdLink : cmdUnlink;
+      run(resolveVault(values.vault as string | undefined), need(positionals[0], usage), need(positionals[1], usage));
       return 0;
     }
 

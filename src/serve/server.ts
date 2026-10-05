@@ -8,10 +8,11 @@ import path from "node:path";
 import { UserError } from "../util.ts";
 import { assertLocalOnly } from "../vault/git.ts";
 import {
-  createGroup, createNote, createTicketFile, deleteGroup, fileView, markSeen, overview, rawFilePath, renderOne, saveFile,
+  createGroup, createNote, createTicketFile, deleteGroup, fileView, linkedFileView, markSeen, overview, rawFilePath, renderOne, saveFile,
   setFrontmatter, setStatus, setTicketGroup, setTicketParent, syncTicket, ticketHistory, ticketView,
 } from "./api.ts";
 import type { SyncResult } from "./api.ts";
+import { linkFolder, unlinkFolder } from "../vault/links.ts";
 import { loadState } from "../vault/state.ts";
 
 export const LOOPBACK_HOST = "127.0.0.1";
@@ -252,6 +253,9 @@ async function api(
   const history = /^GET \/api\/ticket\/([A-Za-z][A-Za-z0-9_]*-\d+)\/history$/.exec(route);
   if (history) return { events: ticketHistory(vault, loadState(vault), history[1].toUpperCase()) };
   if (route === "GET /api/file") return fileView(vault, url.searchParams.get("path") ?? "");
+  if (route === "GET /api/linked-file") {
+    return linkedFileView(vault, url.searchParams.get("key") ?? "", url.searchParams.get("path") ?? "");
+  }
   if (route === "POST /api/render") return { html: renderOne(str(body, "src"), str(body, "path")) };
   if (route === "PUT /api/file") {
     saveFile(vault, str(body, "path"), str(body, "body"), str(body, "head", false));
@@ -290,6 +294,8 @@ async function api(
     setTicketParent(vault, str(body, "key"), strOrNull(body, "parent"));
     return { ok: true };
   }
+  if (route === "POST /api/link") return linkFolder(vault, str(body, "key"), str(body, "path"));
+  if (route === "POST /api/unlink") return unlinkFolder(vault, str(body, "key"), str(body, "path"));
   if (route === "POST /api/sync") return sync(str(body, "key"));
   if (route === "POST /api/note") return { path: createNote(vault, str(body, "folder", false), str(body, "name")) };
   throw new HttpError(404, `No such API: ${route}`);

@@ -493,6 +493,35 @@ test("+ File: new Markdown file in the ticket folder; sync-owned names and notes
   assert.equal((await post("/api/ticket-file", { key: "CLD-7", name: "note-2026-10-02" })).status, 400, "duplicate");
 });
 
+test("linked folders over HTTP: link validates, the ticket lists the files, linked-file renders them, unlink clears", async () => {
+  const ext = path.join(tmp, "ext-docs");
+  fs.mkdirSync(ext);
+  fs.writeFileSync(path.join(ext, "plan.md"), "---\nowner: me\n---\n# Plan\n\n**bold**\n");
+  assert.equal((await post("/api/link", { key: "CLD-7", path: ext }, {})).status, 403, "needs X-LocalFlow");
+  assert.equal((await post("/api/link", { key: "CLD-7", path: path.join(tmp, "missing") })).status, 400);
+  assert.equal(findTicket(vault, "CLD-7")!.notes.linked_folders, undefined, "a broken path is not persisted");
+
+  const ok = await post("/api/link", { key: "CLD-7", path: ext });
+  assert.deepEqual(await ok.json(), { key: "CLD-7", path: ext, added: true });
+  const tv = (await (await fetch(`${base}/api/ticket/CLD-7`)).json()) as { linked: Array<{ name: string; files: Array<{ name: string; path: string }> }> };
+  assert.equal(tv.linked[0].name, "ext-docs");
+  assert.deepEqual(tv.linked[0].files.map((f) => f.name), ["plan.md"]);
+
+  const q = (key: string, file: string) => `${base}/api/linked-file?key=${key}&path=${encodeURIComponent(file)}`;
+  const fv = await fetch(q("CLD-7", tv.linked[0].files[0].path));
+  assert.equal(fv.status, 200);
+  const view = (await fv.json()) as { editable: boolean; fm: Record<string, unknown>; blocks: Array<{ html: string }> };
+  assert.equal(view.editable, false);
+  assert.deepEqual(view.fm, { owner: "me" });
+  assert.ok(view.blocks.some((b) => b.html.includes("<strong>bold</strong>")));
+  assert.equal((await fetch(q("CLD-8", tv.linked[0].files[0].path))).status, 400, "only via the ticket it is linked to");
+  assert.equal((await fetch(q("CLD-7", path.join(vault, "localflow.json")))).status, 400, "nothing outside linked folders");
+
+  assert.equal((await post("/api/unlink", { key: "CLD-7", path: ext })).status, 200);
+  assert.equal(findTicket(vault, "CLD-7")!.notes.linked_folders, undefined);
+  assert.equal((await post("/api/unlink", { key: "CLD-7", path: ext })).status, 400);
+});
+
 test("overview: canSync follows the transport", () => {
   assert.equal(overview(vault).canSync, true);
   const file = path.join(vault, "localflow.json");

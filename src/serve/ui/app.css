@@ -161,7 +161,20 @@ input.sel { background-image: none; padding-right: 8px; width: 120px; font-varia
 .fi .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fi.add { color: var(--muted); }
 .fold .foot { padding: 6px 8px 8px; border-top: 1px solid var(--line); }
-input.inl { width: 100%; border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--raise); font-size: 12.5px; outline: none; }
+/* Linked folders: content outside the vault, set apart from the ticket's own files. */
+.lk { margin-top: 8px; border-top: 1px dashed var(--line-strong); padding-top: 6px; }
+.lkh { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.lkh:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.lkh .chev { width: 10px; font-size: 10px; color: var(--faint); }
+.lkh .ft { color: var(--faint); display: grid; }
+.lkh .nm { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lktag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--local); background: var(--local-bg); border-radius: 4px; padding: 1px 5px; }
+.lkh .gx { flex: none; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--faint); font-size: 14px; line-height: 1; opacity: 0; }
+.lkh:hover .gx, .lkh .gx:focus-visible { opacity: 1; }
+.lkh .gx:hover { color: var(--del); background: var(--err-bg); }
+.lkf { padding-left: 24px; }
+.lkerr { padding: 2px 8px 4px 24px; font-size: 11.5px; color: var(--faint); font-style: italic; }
+.fi.on input.inl { width: 100%; border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--raise); font-size: 12.5px; outline: none; }
 .fold .foot input { width: 100%; border: 1px solid var(--accent); border-radius: 6px; padding: 4px 8px; background: var(--raise); font-size: 12.5px; outline: none; }
 
 /* ---------- pane 4: content ---------- */
