@@ -18,6 +18,7 @@ import type { SyncOptions, SyncReport } from "./sync/run.ts";
 import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, slugify, today, writeFileAtomic } from "./util.ts";
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
+import { linkFolder, unlinkFolder } from "./vault/links.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
 
@@ -237,6 +238,19 @@ export function cmdNote(vault: string, rawKey: string, rawName: string): void {
   if (fs.existsSync(file)) throw new UserError(`${file} already exists.`);
   writeFileAtomic(file, dumpFrontmatter({ ticket: t.key, type: "Note", created: today() }) + `\n# ${t.key} — ${base}\n\n`);
   out(file);
+}
+
+/** Relative paths are taken from the current directory; the stored entry is always absolute. */
+const absFromCwd = (p: string): string => (p.trim().startsWith("~") ? p : path.resolve(p));
+
+export function cmdLink(vault: string, rawKey: string, folder: string): void {
+  const r = linkFolder(vault, rawKey, absFromCwd(folder));
+  out(r.added ? `${r.key}: linked ${r.path}` : `${r.key}: ${r.path} is already linked`);
+}
+
+export function cmdUnlink(vault: string, rawKey: string, folder: string): void {
+  const r = unlinkFolder(vault, rawKey, absFromCwd(folder));
+  out(`${r.key}: unlinked ${r.path}`);
 }
 
 export function cmdCommit(vault: string, message: string | undefined): void {

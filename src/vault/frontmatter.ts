@@ -119,10 +119,10 @@ export function dumpFrontmatter(data: Frontmatter): string {
 }
 
 /**
- * Set scalar keys in a file's frontmatter by editing only the affected lines.
+ * Set keys (scalars or block lists) in a file's frontmatter by editing only the affected lines.
  * Everything else (comments, unknown structures, body) is left byte-for-byte intact.
  */
-export function setFrontmatterKeys(text: string, updates: Record<string, string | number | boolean>): string {
+export function setFrontmatterKeys(text: string, updates: Record<string, string | number | boolean | string[]>): string {
   const m = FRONTMATTER_RE.exec(text);
   if (!m) {
     const data: Frontmatter = { ...updates };
@@ -130,7 +130,7 @@ export function setFrontmatterKeys(text: string, updates: Record<string, string 
   }
   const lines = m[1].split(/\r?\n/);
   for (const [key, value] of Object.entries(updates)) {
-    const newLine = `${key}: ${dumpScalar(value)}`;
+    const newLine = `${key}:${dumpValue(value)}`;
     const idx = lines.findIndex((l) => new RegExp(`^${key}\\s*:`).test(l));
     if (idx === -1) {
       lines.push(newLine);

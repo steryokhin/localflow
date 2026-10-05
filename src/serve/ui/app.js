@@ -21,6 +21,8 @@
   const GROUP_KEY = "lf.group";
   // Keys of tickets whose children are folded away in the list.
   const COLLAPSED_KEY = "lf.collapsed";
+  // Linked folders (absolute paths) whose file lists are folded away in the folder pane.
+  const LINKED_COLLAPSED_KEY = "lf.linkedCollapsed";
   const TICKET_DRAG = "application/x-localflow-ticket";
 
   const ICON = {
@@ -79,6 +81,7 @@
     filter: /^(open|all|status:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
     group: store(GROUP_KEY) || "",
     collapsed: new Set(readList(COLLAPSED_KEY)),
+    linkedCollapsed: new Set(readList(LINKED_COLLAPSED_KEY)),
     confirmGroup: null, // group whose "Delete? Yes/No" is showing
     dragKey: null,      // ticket being dragged
     dropEl: null,       // element currently highlighted as a drop target
@@ -94,8 +97,9 @@
   function parseHash() {
     const h = decodeURIComponent(location.hash.replace(/^#/, ""));
     let m;
-    if ((m = /^\/t\/([A-Z][A-Z0-9_]*-\d+)(?:\/(history)|\/f\/(.+))?$/.exec(h))) {
-      return { kind: "ticket", key: m[1], item: m[2] ? "history" : m[3] ? "file" : "task", file: m[3] || null };
+    if ((m = /^\/t\/([A-Z][A-Z0-9_]*-\d+)(?:\/(history)|\/f\/(.+)|\/x\/(\/.+))?$/.exec(h))) {
+      const item = m[2] ? "history" : m[3] ? "file" : m[4] ? "linked" : "task";
+      return { kind: "ticket", key: m[1], item, file: m[3] || m[4] || null };
     }
     if ((m = /^\/n\/(.+)$/.exec(h))) return { kind: "note", rel: m[1] };
     return { kind: "none" };
@@ -512,12 +516,25 @@
       const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(f);
       h += `<button class="fi${r.item === "file" && r.file === f ? " on" : ""}" data-file="${esc(f)}"><span class="ft">${isImg ? ICON.img : ICON.md}</span><span class="nm">${esc(f)}</span></button>`;
     }
-    h += `</div><div class="foot" id="newfile"><button class="fi add"><span class="ft">+</span><span class="nm">File</span></button></div>`;
+    h += renderLinked(t);
+    h += `</div><div class="foot" id="newfile"><button class="fi add" id="addfile"><span class="ft">+</span><span class="nm">File</span></button>` +
+      `<button class="fi add" id="addlink" title="Link a folder outside the vault"><span class="ft">+</span><span class="nm">Link folder</span></button></div>`;
     $("folder").innerHTML = h;
     $("folder").querySelector('[data-item="task"]').addEventListener("click", () => go(`#/t/${t.row.key}`));
     $("folder").querySelector('[data-item="history"]').addEventListener("click", () => go(`#/t/${t.row.key}/history`));
     $("folder").querySelectorAll("[data-file]").forEach((b) => b.addEventListener("click", () => go(`#/t/${t.row.key}/f/${b.dataset.file}`)));
-    $("newfile").querySelector("button").addEventListener("click", () => {
+    wireLinked(t);
+    $("addlink").addEventListener("click", () => inlineInput($("newfile"), {
+      placeholder: "/absolute/path/to/folder",
+      restore: renderFolder,
+      onSubmit: async (folder) => {
+        const res = await api("POST", "/api/link", { key: t.row.key, path: folder });
+        if (!res.added) toast(`${res.path} is already linked`, true);
+        state.ticket = await api("GET", `/api/ticket/${t.row.key}`);
+        renderFolder();
+      },
+    }));
+    $("addfile").addEventListener("click", () => {
       const stem = `note-${new Date().toLocaleDateString("sv-SE")}`;
       inlineInput($("newfile"), {
         placeholder: "file name (.md)",
@@ -532,6 +549,53 @@
         },
       });
     });
+  }
+
+  /** Linked folders below the ticket's own files: external content, labelled and foldable. */
+  function renderLinked(t) {
+    const r = state.route;
+    let h = "";
+    for (const f of t.linked || []) {
+      const folded = state.linkedCollapsed.has(f.path);
+      h += `<div class="lk"><div class="lkh" role="button" tabindex="0" data-lktoggle="${esc(f.path)}" title="${esc(f.path)}">` +
+        `<span class="chev">${folded ? "▸" : "▾"}</span><span class="ft">${ICON.folder}</span><span class="nm">${esc(f.name)}</span>` +
+        `<span class="lktag">linked</span><button class="gx" data-unlink="${esc(f.path)}" title="Unlink (the folder stays on disk)" aria-label="Unlink ${esc(f.name)}">×</button></div>`;
+      if (!folded) {
+        if (f.error) h += `<div class="lkerr">${esc(f.error)}</div>`;
+        else if (!f.files.length) h += `<div class="lkerr">no files</div>`;
+        for (const x of f.files) {
+          h += `<button class="fi lkf${r.item === "linked" && r.file === x.path ? " on" : ""}" data-lfile="${esc(x.path)}" title="${esc(x.path)}">` +
+            `<span class="ft">${ICON.md}</span><span class="nm">${esc(x.name)}</span></button>`;
+        }
+      }
+      h += `</div>`;
+    }
+    return h;
+  }
+
+  function wireLinked(t) {
+    const folder = $("folder");
+    folder.querySelectorAll("[data-lktoggle]").forEach((row) => {
+      const toggle = () => {
+        const p = row.dataset.lktoggle;
+        if (state.linkedCollapsed.has(p)) state.linkedCollapsed.delete(p); else state.linkedCollapsed.add(p);
+        save(LINKED_COLLAPSED_KEY, JSON.stringify([...state.linkedCollapsed]));
+        keepScroll(folder.querySelector(".body"), renderFolder);
+      };
+      row.addEventListener("click", (e) => { if (!e.target.closest("[data-unlink]")) toggle(); });
+      row.addEventListener("keydown", (e) => {
+        if (e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); }
+      });
+    });
+    folder.querySelectorAll("[data-unlink]").forEach((b) => b.addEventListener("click", async () => {
+      try {
+        await api("POST", "/api/unlink", { key: t.row.key, path: b.dataset.unlink });
+        state.ticket = await api("GET", `/api/ticket/${t.row.key}`);
+        if (state.route.item === "linked" && state.route.file.startsWith(b.dataset.unlink + "/")) go(`#/t/${t.row.key}`);
+        else renderFolder();
+      } catch (err) { toast(err.message); }
+    }));
+    folder.querySelectorAll("[data-lfile]").forEach((b) => b.addEventListener("click", () => go(`#/t/${t.row.key}/x/${encodeURIComponent(b.dataset.lfile)}`)));
   }
 
   // ---------- pane 4: ticket mirror ----------
@@ -653,6 +717,7 @@
       this.savedAt = opts.savedAt || "";
       this.title = opts.title;
       this.props = opts.props || "";
+      this.viewUrl = opts.viewUrl || `/api/file?path=${encodeURIComponent(this.rel)}`;
       this.render();
     }
 
@@ -830,7 +895,7 @@
     /** True when the file on disk no longer matches what this editor was built from. */
     async changedOnDisk() {
       try {
-        const view = await api("GET", `/api/file?path=${encodeURIComponent(this.rel)}`);
+        const view = await api("GET", this.viewUrl);
         return view.head !== this.head || view.blocks.map((b) => b.src).join("\n\n") !== this.text();
       } catch { return false; }
     }
@@ -876,19 +941,20 @@
     });
   }
 
-  async function openFile(rel, title) {
-    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(rel)) {
+  /** Opens a file in the viewer/editor. viewUrl replaces /api/file for files outside the vault. */
+  async function openFile(rel, title, viewUrl) {
+    if (!viewUrl && /\.(png|jpe?g|gif|webp|svg)$/i.test(rel)) {
       const url = "/raw/" + rel.split("/").map(encodeURIComponent).join("/");
       $("content").innerHTML = `<div class="eh"><span class="path">${title}</span></div><div class="imgview"><img src="${url}" alt="${esc(rel.split("/").pop())}"></div>`;
       return;
     }
     let view;
-    try { view = await api("GET", `/api/file?path=${encodeURIComponent(rel)}`); } catch (err) { toast(err.message); return; }
+    try { view = await api("GET", viewUrl || `/api/file?path=${encodeURIComponent(rel)}`); } catch (err) { toast(err.message); return; }
     if (!/\.md$/i.test(rel)) {
       $("content").innerHTML = `<div class="eh"><span class="path">${title}</span><span class="hint">read-only</span></div><pre class="plain">${esc(view.blocks.map((b) => b.src).join("\n\n"))}</pre>`;
       return;
     }
-    state.editor = new Editor(view, { title, props: propsStrip(view) });
+    state.editor = new Editor(view, { title, props: propsStrip(view), viewUrl });
     wireProps(view);
     // A file just made with "+ File" opens ready to type under its heading.
     if (state.pendingEdit === rel && state.editor.editable) {
@@ -914,6 +980,11 @@
       if (r.item === "history") return renderHistory(t);
       if (r.item === "file") {
         return openFile(`${t.rel}/${r.file}`, `<span class="key">${esc(t.row.key)}</span> / <b>${esc(r.file)}</b>`);
+      }
+      if (r.item === "linked") {
+        const name = r.file.split("/").pop();
+        const viewUrl = `/api/linked-file?key=${encodeURIComponent(t.row.key)}&path=${encodeURIComponent(r.file)}`;
+        return openFile(r.file, `<span class="key">${esc(t.row.key)}</span> / <span class="lktag">linked</span> <b title="${esc(r.file)}">${esc(name)}</b>`, viewUrl);
       }
       // A local ticket's ticket.md belongs to the user, so it opens in the editor.
       if (t.row.source === "local") return openFile(`${t.rel}/ticket.md`, `<span class="key">${esc(t.row.key)}</span> / <b>ticket.md</b>`);
