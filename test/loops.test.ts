@@ -150,7 +150,7 @@ test("watch writes NUDGES.md and notifies once per loop and deadline, never in q
   watchOnce(vault, new Date(2026, 9, 15, 9, 5), { notifier });
   assert.equal(calls.length, 3, "a moved deadline is announced again");
   assert.match(calls[2], /^Soon — Lena/);
-  assert.match(read(".gitignore"), /^ACTIONS\.md$/m);
+  assert.match(read(".gitignore"), /^\/ACTIONS\.md$/m);
 });
 
 test("quiet hours wrap past midnight and cover weekends", () => {

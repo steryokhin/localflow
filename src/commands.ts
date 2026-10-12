@@ -41,7 +41,7 @@ export function cmdInit(
   if (fs.existsSync(path.join(vault, CONFIG_FILE))) throw new UserError(`${vault} is already a Local Flow vault.`);
   fs.mkdirSync(path.join(vault, PROJECTS_DIR), { recursive: true });
   writeFileAtomic(path.join(vault, CONFIG_FILE), JSON.stringify(defaultConfig(opts), null, 2) + "\n");
-  writeFileAtomic(path.join(vault, ".gitignore"), `${STATE_DIR}/\n${INBOX_FILE}\n${ACTIONS_FILE}\n${NUDGES_FILE}\n.DS_Store\n`);
+  writeFileAtomic(path.join(vault, ".gitignore"), `${STATE_DIR}/\n${INBOX_FILE}\n/${ACTIONS_FILE}\n/${NUDGES_FILE}\n.DS_Store\n`);
   if (!isRepo(vault)) initRepo(vault);
   assertLocalOnly(vault);
   commitPaths(vault, [CONFIG_FILE, ".gitignore"], "init: Local Flow vault");

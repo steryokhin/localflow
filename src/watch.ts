@@ -20,7 +20,9 @@ export const DEFAULT_QUIET_HOURS = "20:00-08:00";
 /** Rewrites ACTIONS.md from loops.md; returns the open loops. */
 export function refreshActions(vault: string, now: Date): Loop[] {
   const loops = syncLoops(vault);
-  ensureIgnored(vault, [ACTIONS_FILE, NUDGES_FILE]);
+  // Anchored to the vault root: git on macOS ignores case, and a bare "ACTIONS.md" would also hide
+  // every ticket's own actions.md.
+  ensureIgnored(vault, [`/${ACTIONS_FILE}`, `/${NUDGES_FILE}`]);
   writeFileAtomic(path.join(vault, ACTIONS_FILE), renderActions(loops, listTickets(vault), now));
   return loops;
 }
