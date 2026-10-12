@@ -34,7 +34,9 @@ vault's git repository is local and has no remote. Full command list: `lf help`.
   comments. Image links are relative (`attachments/…`); Read opens them as images.
 - `raw/issue.json` — the raw Jira response, for a field that is not in `ticket.md`.
 - `notes.md` — what has already been decided and done. Read it **before** proposing anything.
-- History: `lf diff KEY` (since the last "seen" mark), `git -C <vault> log -p -- <folder>/ticket.md`.
+- What changed: `lf diff KEY` — fields was → now, new and edited comments in full, attachments and
+  the changed text blocks since the user last marked it seen; `--since YYYY-MM-DD` or a commit for
+  another baseline, `--git` for a raw `git diff`. Full history: `git -C <vault> log -p -- <folder>/ticket.md`.
 
 ## Getting tickets in: two transports
 
@@ -72,8 +74,8 @@ After a sync or import:
 ```
 lf inbox           # tickets changed since the user last looked
 ```
-Report briefly what changed (`lf inbox` already summarizes: new comments, status changes, edited
-descriptions, attachments). Mark as read only after reporting: `lf seen KEY` or `lf seen --all`.
+Report briefly what changed (`lf inbox` already lists up to three changes per ticket: who
+commented what, fields was → now, attachments; `lf diff KEY` has the rest). Mark as read only after reporting: `lf seen KEY` or `lf seen --all`.
 An empty inbox is a valid result: say "nothing new".
 
 ## Task flow

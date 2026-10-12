@@ -396,6 +396,7 @@
         `<div class="r1">${chev}<span class="key">${esc(t.key)}</span>${prioChip(t.priority)}${folded ? `<span class="kids" title="${kids} nested">${kids}</span>` : ""}</div>` +
         (t.unread ? `<span class="dot" title="${t.unread} unread change${t.unread === 1 ? "" : "s"}"></span>` : "<span></span>") +
         `<div class="ti">${esc(t.title)}</div>` +
+        (t.unread && t.change ? `<div class="chl" title="${esc(t.change)}">${esc(t.change)}</div>` : "") +
         `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}</div></div>`;
     }
     h += `<div class="unnest">Drop here to un-nest</div>`;
@@ -617,11 +618,34 @@
 
   // ---------- pane 4: ticket mirror ----------
 
+  function fmtWhen(iso) {
+    const d = new Date(iso || "");
+    return isNaN(d) ? "" : d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+
+  /**
+   * "Changes since last view", open on top of an unread ticket: fields was → now, comments with
+   * author and text, attachments. Text edits are highlighted in the document below.
+   */
   function sinceStrip(t) {
     if (!t.unread.length) return "";
     const since = t.seenDate ? ` since ${new Date(t.seenDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : "";
-    const summary = t.unread.map((e) => e.text).join(", ");
-    return `<div class="since">${ICON.spark}<span class="t"><b>${t.unread.length} new${since}:</b> ${esc(summary)}</span><button class="btn" id="seen">Mark seen</button></div>`;
+    const items = t.changes || [];
+    const summary = items.length ? `${items.length} change${items.length === 1 ? "" : "s"}${since}` : `${t.unread.length} new${since}: ${t.unread.map((e) => e.text).join(", ")}`;
+    let h = `<div class="since">${ICON.spark}<span class="t"><b>${esc(summary)}</b></span><button class="btn" id="seen">Mark seen</button></div>`;
+    if (!items.length) return h;
+    h += `<div class="chg">`;
+    for (const c of items) {
+      if (c.kind === "comment" && c.body !== undefined) {
+        const verb = /edited a comment/.test(c.text) ? "edited a comment" : "commented";
+        h += `<div class="ci cm"><div class="cw"><b>${esc(c.who)}</b> ${verb}<time>${esc(fmtWhen(c.date))}</time></div><div class="cb">${esc(c.body)}</div></div>`;
+      } else {
+        const when = c.kind === "attachment" || c.kind === "new" ? `<time>${esc(fmtWhen(c.date))}</time>` : "";
+        const hint = c.kind === "text" ? ` <span class="hint">— highlighted below</span>` : "";
+        h += `<div class="ci ${esc(c.kind)}">${esc(c.text)}${hint}${when}</div>`;
+      }
+    }
+    return h + `</div>`;
   }
 
   const syncLabel = (busy) => (busy ? '<span class="spin"></span>Syncing…' : "Sync");

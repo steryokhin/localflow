@@ -52,7 +52,11 @@ function similar(a: string, b: string): boolean {
 export function diffBlocks(oldMd: string | null, newMd: string): DiffBlock[] {
   const b = splitBlocks(newMd);
   if (oldMd === null) return b.map((src) => ({ src, state: "same" }));
-  const a = splitBlocks(oldMd);
+  return diffBlockLists(splitBlocks(oldMd), b);
+}
+
+/** Same as diffBlocks, over blocks already split; the result has one entry per block of `b`. */
+export function diffBlockLists(a: string[], b: string[]): DiffBlock[] {
   const pairs = lcs(a, b);
   const out: DiffBlock[] = [];
   let ai = 0;

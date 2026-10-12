@@ -9,10 +9,12 @@ import { ATTACHMENTS_DIR } from "./jira/attachments.ts";
 import { JiraClient } from "./jira/client.ts";
 import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
-import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox } from "./render/inbox.ts";
+import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox, unreadLines } from "./render/inbox.ts";
 import { ACTIONS_FILE, NUDGES_FILE, fmtDue, renderStandup } from "./render/loops.ts";
 import { renderReport } from "./report.ts";
 import { startServer } from "./serve/server.ts";
+import { changeLine, fmtWhen, resolveSince, ticketChanges, unreadChanges } from "./sync/changes.ts";
+import type { Change } from "./sync/changes.ts";
 import { runImport } from "./sync/import.ts";
 import { jiraAuth, runSync } from "./sync/run.ts";
 import type { SyncOptions, SyncReport } from "./sync/run.ts";
@@ -132,16 +134,19 @@ function printReport(vault: string, report: SyncReport, dryRun: boolean): void {
 }
 
 export function cmdInbox(vault: string): void {
+  const config = loadConfig(vault);
+  const state = loadState(vault);
   const tickets = new Map(listTickets(vault).map((t) => [t.key, t]));
-  const unread = unreadByTicket(vault, loadState(vault));
+  const unread = unreadByTicket(vault, state);
   refreshInbox(vault);
   if (unread.size === 0) {
     out("Nothing new.");
     return;
   }
+  const changes = unreadChanges(vault, [...tickets.values()], unread.keys(), config, state);
   for (const [key, events] of unread) {
     out(`${key}  ${tickets.get(key)?.title ?? "(ticket folder missing)"}`);
-    for (const e of events) out(`    ${e.date}  ${e.text}`);
+    for (const line of unreadLines(events, changes.get(key))) out(`    ${line}`);
   }
   out();
   out(`${unread.size} unread. \`lf diff KEY\` shows the changes, \`lf seen KEY\` / \`lf seen --all\` marks them read.`);
@@ -159,13 +164,70 @@ export function cmdSeen(vault: string, keys: string[], all: boolean): void {
   out(`Marked ${targets.length} ticket(s) as seen.`);
 }
 
-export function cmdDiff(vault: string, rawKey: string, passthrough: string[]): number {
+/**
+ * What changed in a ticket since the "seen" mark (or --since a commit or date): fields was → now,
+ * comments in full, attachments, changed text blocks. With --git, a plain `git diff` instead.
+ */
+export function cmdDiff(vault: string, rawKey: string, opts: { since?: string; git?: string[] }): number {
   const t = requireTicket(vault, rawKey);
   const state = loadState(vault);
-  const base = state.seen[t.key] ?? EMPTY_TREE;
-  // raw/issue.json is left out: it repeats ticket.md in a noisier form.
-  const paths = t.source === "jira" ? [`${t.rel}/${TICKET_FILE}`, `${t.rel}/${ATTACHMENTS_DIR}`] : [t.rel];
-  return gitInteractive(vault, ["diff", ...passthrough, base, "HEAD", "--", ...paths]);
+  const seen = state.seen[t.key] ?? null;
+  const base = opts.since ? resolveSince(vault, opts.since) : seen;
+  if (opts.git) {
+    // raw/issue.json is left out: it repeats ticket.md in a noisier form.
+    const paths = t.source === "jira" ? [`${t.rel}/${TICKET_FILE}`, `${t.rel}/${ATTACHMENTS_DIR}`] : [t.rel];
+    return gitInteractive(vault, ["diff", ...opts.git, base ?? EMPTY_TREE, "HEAD", "--", ...paths]);
+  }
+  if (t.source !== "jira") {
+    out(`${t.key} is a local ticket: nothing comes from Jira. \`lf diff ${t.key} --git\` shows the file history.`);
+    return 0;
+  }
+  const changes = ticketChanges(vault, t, base, { text: true, state });
+  const since = opts.since ? `since ${opts.since}` : seen ? "since you last marked it seen" : "since it arrived";
+  out(`${t.key}  ${t.title}`);
+  out(`Changes ${since}:`);
+  if (!changes.items.length && !changes.blocks.length) {
+    out("  nothing");
+    return 0;
+  }
+  const kinds: Array<[string, Array<Change["kind"]>]> = [["Fields", ["new", "field", "links"]], ["Comments", ["comment"]], ["Attachments", ["attachment"]]];
+  for (const [title, ks] of kinds) {
+    const items = changes.items.filter((c) => ks.includes(c.kind));
+    if (!items.length) continue;
+    out();
+    out(title);
+    for (const c of items) {
+      if (c.kind === "comment" && c.body !== undefined) {
+        out(`  ${fmtWhen(c.date)} ${c.who}${c.text.includes("edited") ? " (edited)" : ""}:`);
+        for (const line of wrap(c.body, 96)) out(`      ${line}`);
+      } else out(`  ${changeLine(c)}`);
+    }
+  }
+  let section = "";
+  for (const b of changes.blocks) {
+    if (b.section !== section) {
+      section = b.section;
+      out();
+      out(section);
+    }
+    if (b.was !== undefined) for (const line of b.was.split("\n")) out(`  - ${line}`);
+    for (const line of b.now.split("\n")) out(`  + ${line}`);
+    out();
+  }
+  return 0;
+}
+
+function wrap(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  for (const word of text.split(" ")) {
+    if (cur && cur.length + word.length + 1 > width) {
+      lines.push(cur);
+      cur = word;
+    } else cur = cur ? `${cur} ${word}` : word;
+  }
+  if (cur) lines.push(cur);
+  return lines;
 }
 
 export function cmdLs(

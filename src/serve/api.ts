@@ -16,6 +16,8 @@ import type { Frontmatter } from "../vault/frontmatter.ts";
 import { git, head, log } from "../vault/git.ts";
 import { SYNC_SUBJECT_PREFIX, loadState, saveState, unreadByTicket } from "../vault/state.ts";
 import type { State } from "../vault/state.ts";
+import { changeLine, ticketChanges, unreadChanges } from "../sync/changes.ts";
+import type { Change } from "../sync/changes.ts";
 import { runSync } from "../sync/run.ts";
 import { KEY_ONLY_RE, NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "../vault/store.ts";
 import type { Ticket } from "../vault/store.ts";
@@ -79,6 +81,8 @@ export interface TicketRow {
   group: string;
   /** Manual parent ticket key from notes.md, or null. */
   parent: string | null;
+  /** For unread tickets: the first thing that changed ("Tom commented: «…»"), else null. */
+  change: string | null;
 }
 
 export interface GroupInfo {
@@ -109,7 +113,7 @@ export interface Overview {
   canSync: boolean;
 }
 
-function row(t: Ticket, config: Config, unread: number): TicketRow {
+function row(t: Ticket, config: Config, unread: number, change: Change[] = []): TicketRow {
   return {
     key: t.key,
     project: t.project,
@@ -127,6 +131,7 @@ function row(t: Ticket, config: Config, unread: number): TicketRow {
     updated: t.fm.updated ? String(t.fm.updated) : null,
     group: groupOf(t),
     parent: parentOf(t),
+    change: change.length ? changeLine(change[0]) + (change.length > 1 ? ` · +${change.length - 1} more` : "") : null,
   };
 }
 
@@ -161,7 +166,9 @@ export function overview(vault: string): Overview {
   const config = loadConfig(vault);
   const state = loadState(vault);
   const unread = unreadByTicket(vault, state);
-  const tickets = listTickets(vault).map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0) }));
+  const all = listTickets(vault);
+  const changes = unreadChanges(vault, all, unread.keys(), config, state);
+  const tickets = all.map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0, changes.get(t.key)) }));
   return {
     vault,
     lastSync: state.lastSync,
@@ -329,6 +336,8 @@ export interface TicketView {
   repo: { name: string; rel: string; exists: boolean } | null;
   blocks: RenderedBlock[];
   unread: HistoryEvent[];
+  /** What changed since the "seen" mark, when something is unread. */
+  changes: Change[];
   seenDate: string | null;
 }
 
@@ -375,8 +384,9 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     .map((e) => e.name)
     .sort((a, b) => (a === NOTES_FILE ? -1 : b === NOTES_FILE ? 1 : a.localeCompare(b)));
   const seenCommit = seenSha ? log(vault).find((c) => c.sha === seenSha) : undefined;
+  const changes = unread.length ? ticketChanges(vault, t, seenSha ?? null, { config, state }).items : [];
   return {
-    row: row(t, config, unread.length),
+    row: row(t, config, unread.length, changes),
     rel: t.rel,
     fm: t.fm,
     notes: t.notes,
@@ -385,6 +395,7 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     repo: repoOf(vault, t),
     blocks,
     unread,
+    changes,
     seenDate: seenCommit?.date ?? null,
   };
 }

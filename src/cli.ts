@@ -26,7 +26,9 @@ Sync
 
 What is new
   inbox                           tickets changed since you last looked
-  diff KEY [git diff options]     what exactly changed in a ticket
+  diff KEY [--since COMMIT|DATE] [--git [git diff options]]
+                                  what exactly changed: fields was → now, comments, attachments,
+                                  text; since you last looked unless --since; --git: raw git diff
   seen KEY... | --all             mark as read
 
 Work
@@ -155,11 +157,14 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "diff": {
-      // Everything after KEY is handed to `git diff` untouched (e.g. --stat, --word-diff).
-      const vaultIdx = rest.indexOf("--vault");
-      const vaultFlag = vaultIdx >= 0 ? rest[vaultIdx + 1] : undefined;
-      const args = vaultIdx >= 0 ? [...rest.slice(0, vaultIdx), ...rest.slice(vaultIdx + 2)] : rest;
-      return cmdDiff(resolveVault(vaultFlag), need(args[0], "lf diff KEY [git diff options]"), args.slice(1));
+      // Everything after --git is handed to `git diff` untouched (e.g. --stat, --word-diff).
+      const gitAt = rest.indexOf("--git");
+      const own = gitAt >= 0 ? rest.slice(0, gitAt) : rest;
+      const { values, positionals } = parse(own, { since: { type: "string" } });
+      return cmdDiff(resolveVault(values.vault as string | undefined), need(positionals[0], "lf diff KEY [--since COMMIT|YYYY-MM-DD] [--git [git diff options]]"), {
+        since: values.since as string | undefined,
+        git: gitAt >= 0 ? rest.slice(gitAt + 1) : undefined,
+      });
     }
 
     case "ls": {

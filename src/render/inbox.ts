@@ -4,6 +4,8 @@ import path from "node:path";
 import { INBOX_FILE, loadConfig } from "../config.ts";
 import type { Config } from "../config.ts";
 import { STATUS_RANK, mapLocalStatus } from "../jira/mapping.ts";
+import { summaryLines, unreadChanges } from "../sync/changes.ts";
+import type { Change } from "../sync/changes.ts";
 import { nowStamp, writeFileAtomic } from "../util.ts";
 import { loadState, unreadByTicket } from "../vault/state.ts";
 import type { UnreadEvent } from "../vault/state.ts";
@@ -34,7 +36,12 @@ function link(t: Ticket, file: string): string {
   return `${encodeURI(t.rel)}/${file}`;
 }
 
-export function renderInbox(tickets: Ticket[], unread: Map<string, UnreadEvent[]>, config: Config): string {
+/** What to show under an unread ticket: what changed, or the sync's own event lines as a fallback. */
+export function unreadLines(events: UnreadEvent[], changes: Change[] | undefined): string[] {
+  return changes?.length ? summaryLines(changes) : events.map((e) => `${e.date}: ${e.text}`);
+}
+
+export function renderInbox(tickets: Ticket[], unread: Map<string, UnreadEvent[]>, config: Config, changes = new Map<string, Change[]>()): string {
   const lines: string[] = ["# Local Flow — Inbox", "", `_Generated ${nowStamp()} by \`lf\`. Do not edit: this file is rewritten._`, ""];
 
   const unreadTickets = tickets.filter((t) => unread.has(t.key));
@@ -42,7 +49,7 @@ export function renderInbox(tickets: Ticket[], unread: Map<string, UnreadEvent[]
   if (unreadTickets.length === 0) lines.push("_Nothing new._");
   for (const t of unreadTickets) {
     lines.push(`- [${t.key}](${link(t, TICKET_FILE)}) — ${t.title}`);
-    for (const e of unread.get(t.key) ?? []) lines.push(`    - ${e.date}: ${e.text}`);
+    for (const line of unreadLines(unread.get(t.key) ?? [], changes.get(t.key))) lines.push(`    - ${line}`);
   }
   lines.push("");
 
@@ -71,6 +78,8 @@ export function renderInbox(tickets: Ticket[], unread: Map<string, UnreadEvent[]
 export function refreshInbox(vault: string): void {
   const config = loadConfig(vault);
   const tickets = listTickets(vault);
-  const unread = unreadByTicket(vault, loadState(vault));
-  writeFileAtomic(path.join(vault, INBOX_FILE), renderInbox(tickets, unread, config));
+  const state = loadState(vault);
+  const unread = unreadByTicket(vault, state);
+  const changes = unreadChanges(vault, tickets, unread.keys(), config, state);
+  writeFileAtomic(path.join(vault, INBOX_FILE), renderInbox(tickets, unread, config, changes));
 }
