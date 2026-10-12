@@ -86,11 +86,11 @@ test("changes since the seen mark: fields, comments with author and text, attach
 
 test("INBOX.md and lf inbox show up to three change lines per ticket, not just that it changed", () => {
   const inbox = fs.readFileSync(path.join(vault, "INBOX.md"), "utf8");
-  assert.match(inbox, /- \[DEMO-1\]\([^)]+\) — Swipe approval does not work\n    - status: Open → In Review\n    - labels: ios → ios, swipe\n    - description changed\n    - … \d+ more\n/);
+  assert.match(inbox, /- \[DEMO-1\]\([^)]+\) — Swipe approval does not work\n    - \d\d\.09 \d\d:30 · Olga Reporter edited a comment: «First look, edited\.»\n    - 03\.09 \d\d:05 · Tom Reviewer commented: «Approved[^\n]*\n    - status: Open → In Review\n    - … \d+ more\n/);
   printed.length = 0;
   cmdInbox(vault);
   assert.equal(printed[0], "DEMO-1  Swipe approval does not work");
-  assert.equal(printed[1], "    status: Open → In Review");
+  assert.match(printed[1], /^    \d\d\.09 \d\d:30 · Olga Reporter edited a comment/);
 });
 
 test("lf diff prints fields, full comments, attachments and the changed text", () => {
@@ -120,7 +120,7 @@ test("the web UI gets the changes for the open ticket and a one-line summary in 
   const view = ticketView(vault, "DEMO-1");
   assert.equal(view.changes[0].text, "status: Open → In Review");
   const row = overview(vault).tickets.find((r) => r.key === "DEMO-1")!;
-  assert.match(row.change!, /^status: Open → In Review · \+\d+ more$/);
+  assert.match(row.change!, /^\d\d\.09 \d\d:30 · Olga Reporter edited a comment: «First look, edited\.» · \+\d+ more$/);
   cmdSeen(vault, ["DEMO-1"], false);
   assert.deepEqual(ticketView(vault, "DEMO-1").changes, []);
   assert.equal(overview(vault).tickets.find((r) => r.key === "DEMO-1")!.change, null);

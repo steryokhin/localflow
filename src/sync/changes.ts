@@ -250,9 +250,16 @@ export function unreadChanges(vault: string, tickets: Ticket[], unreadKeys: Iter
   return out;
 }
 
-/** Up to `max` change lines, plus a "… N more" line. */
+/** For short summaries: who said what first, then status and assignee, then the rest. */
+export function byImportance(items: Change[]): Change[] {
+  const rank = (c: Change): number =>
+    c.kind === "new" || c.kind === "comment" ? 0 : c.kind === "field" && /^(status|assignee|resolution):/.test(c.text) ? 1 : c.kind === "attachment" ? 2 : 3;
+  return items.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i).map((x) => x.c);
+}
+
+/** Up to `max` change lines, most telling first, plus a "… N more" line. */
 export function summaryLines(items: Change[], max = 3): string[] {
-  const lines = items.slice(0, max).map(changeLine);
+  const lines = byImportance(items).slice(0, max).map(changeLine);
   if (items.length > max) lines.push(`… ${items.length - max} more`);
   return lines;
 }

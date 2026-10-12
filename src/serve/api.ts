@@ -16,7 +16,7 @@ import type { Frontmatter } from "../vault/frontmatter.ts";
 import { git, head, log } from "../vault/git.ts";
 import { SYNC_SUBJECT_PREFIX, loadState, saveState, unreadByTicket } from "../vault/state.ts";
 import type { State } from "../vault/state.ts";
-import { changeLine, ticketChanges, unreadChanges } from "../sync/changes.ts";
+import { byImportance, changeLine, ticketChanges, unreadChanges } from "../sync/changes.ts";
 import type { Change } from "../sync/changes.ts";
 import { runSync } from "../sync/run.ts";
 import { KEY_ONLY_RE, NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "../vault/store.ts";
@@ -131,7 +131,7 @@ function row(t: Ticket, config: Config, unread: number, change: Change[] = []): 
     updated: t.fm.updated ? String(t.fm.updated) : null,
     group: groupOf(t),
     parent: parentOf(t),
-    change: change.length ? changeLine(change[0]) + (change.length > 1 ? ` · +${change.length - 1} more` : "") : null,
+    change: change.length ? changeLine(byImportance(change)[0]) + (change.length > 1 ? ` · +${change.length - 1} more` : "") : null,
   };
 }
 
