@@ -9,6 +9,7 @@ import { dueAt, fmtDay, ME, LOOPS_ARCHIVE } from "../vault/loops.ts";
 import type { Loop } from "../vault/loops.ts";
 import { isTracked, readLog, readLogLines } from "../vault/notes.ts";
 import type { LogLine } from "../vault/notes.ts";
+import { PLAN_FILE } from "../vault/scaffold.ts";
 import { NOTES_FILE } from "../vault/store.ts";
 import type { Ticket } from "../vault/store.ts";
 
@@ -16,7 +17,6 @@ export const ACTIONS_FILE = "ACTIONS.md";
 export const NUDGES_FILE = "NUDGES.md";
 /** A loop that expires within this window is "soon". */
 export const SOON_MS = 60 * 60 * 1000;
-const PLAN_FILE = "actions.md";
 const CLOSED = ["done", "archived"];
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -76,10 +76,10 @@ function loopLine(l: Loop, now: Date, opts: { overdue?: boolean } = {}): string 
   return `- ${l.id} · ${l.key ?? "—"} · ${l.text}${who(l)} · ${when}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
 }
 
-/** Unchecked "- [ ]" items in the ticket's actions.md: the ticket has a plan of its own. */
+/** Unchecked, non-empty "- [ ] step" items in actions.md: the ticket has a plan of its own. */
 function hasPlan(t: Ticket): boolean {
   const text = readTextIfExists(path.join(t.dir, PLAN_FILE));
-  return !!text && /^\s*- \[ \]/m.test(text);
+  return !!text && /^\s*- \[ \][ \t]*\S/m.test(text);
 }
 
 function lastLog(t: Ticket): string | null {

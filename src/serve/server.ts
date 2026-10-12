@@ -13,6 +13,8 @@ import {
 } from "./api.ts";
 import type { SyncResult } from "./api.ts";
 import { linkFolder, unlinkFolder } from "../vault/links.ts";
+import { setRepo } from "../vault/scaffold.ts";
+import { requireTicket } from "../vault/store.ts";
 import { loadState } from "../vault/state.ts";
 
 export const LOOPBACK_HOST = "127.0.0.1";
@@ -296,6 +298,7 @@ async function api(
   }
   if (route === "POST /api/link") return linkFolder(vault, str(body, "key"), str(body, "path"));
   if (route === "POST /api/unlink") return unlinkFolder(vault, str(body, "key"), str(body, "path"));
+  if (route === "POST /api/repo") return setRepo(vault, requireTicket(vault, str(body, "key")), str(body, "name"));
   if (route === "POST /api/sync") return sync(str(body, "key"));
   if (route === "POST /api/note") return { path: createNote(vault, str(body, "folder", false), str(body, "name")) };
   throw new HttpError(404, `No such API: ${route}`);

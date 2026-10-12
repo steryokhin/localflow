@@ -520,7 +520,8 @@
     const unread = t.unread.length;
     let h = `<div class="fh">${ICON.folder}<b title="${esc(t.rel)}">${esc(t.rel.split("/").pop())}</b></div><div class="body">` +
       `<button class="pin${r.item === "task" ? " on" : ""}" data-item="task"><span class="pi">${ICON.task}</span><span class="pn">Original Task</span><span class="ps">${esc(t.row.key)} · ${t.row.source === "jira" ? "from Jira" : "local"}</span></button>` +
-      `<button class="pin${r.item === "history" ? " on" : ""}" data-item="history"><span class="pi">${ICON.hist}</span><span class="pn">History</span><span class="ps" id="histcount">events</span>${unread ? `<span class="bd" title="${unread} unread">${unread}</span>` : ""}</button><hr>`;
+      `<button class="pin${r.item === "history" ? " on" : ""}" data-item="history"><span class="pi">${ICON.hist}</span><span class="pn">History</span><span class="ps" id="histcount">events</span>${unread ? `<span class="bd" title="${unread} unread">${unread}</span>` : ""}</button>` +
+      (t.repo ? `<button class="pin" data-item="repo" title="${esc(t.repo.rel)}${t.repo.exists ? "" : " (will be created)"}"><span class="pi">${ICON.folder}</span><span class="pn">Repo notes</span><span class="ps">${esc(t.repo.name)}</span></button>` : "") + "<hr>";
     for (const f of t.files) {
       const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(f);
       h += `<button class="fi${r.item === "file" && r.file === f ? " on" : ""}" data-file="${esc(f)}"><span class="ft">${isImg ? ICON.img : ICON.md}</span><span class="nm">${esc(f)}</span></button>`;
@@ -531,6 +532,13 @@
     $("folder").innerHTML = h;
     $("folder").querySelector('[data-item="task"]').addEventListener("click", () => go(`#/t/${t.row.key}`));
     $("folder").querySelector('[data-item="history"]').addEventListener("click", () => go(`#/t/${t.row.key}/history`));
+    const repo = $("folder").querySelector('[data-item="repo"]');
+    if (repo) repo.addEventListener("click", async () => {
+      try {
+        if (!t.repo.exists) await api("POST", "/api/repo", { key: t.row.key, name: t.repo.name });
+        go(`#/n/${t.repo.rel}`);
+      } catch (err) { toast(err.message); }
+    });
     $("folder").querySelectorAll("[data-file]").forEach((b) => b.addEventListener("click", () => go(`#/t/${t.row.key}/f/${b.dataset.file}`)));
     wireLinked(t);
     $("addlink").addEventListener("click", () => inlineInput($("newfile"), {

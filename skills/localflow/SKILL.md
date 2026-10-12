@@ -80,16 +80,37 @@ An empty inbox is a valid result: say "nothing new".
 
 | Moment | Action |
 |---|---|
-| "Let's start KEY" | `lf start KEY` (status → inprogress, sets `taken:`) and a feature branch in the code repository named after the ticket key in lower case (`proj-123-short-slug`) |
-| While working | Write every decision into `notes.md` **as you go**, dated: decisions, what was done (commit hash), open questions. `notes.md` is the source of truth between sessions and after `/clear` |
-| Lots of material | Separate files via `lf note KEY <name>` (scratchpad, review-findings, plan) with frontmatter `ticket: KEY` |
-| PR opened | `lf status KEY inreview` |
+| "Let's start KEY" | `lf start KEY` (status → inprogress, `taken:`, `tracked: true`, creates `ai-summary.md` and `actions.md`), then fill `ai-summary.md` first. A feature branch in the code repository named after the ticket key in lower case (`proj-123-short-slug`); `lf repo KEY <repo>` links the shared repository notes |
+| While working | Decisions into `## Decisions` of `notes.md`, one dated line per action into `## Log` (`lf log KEY "…"`), the plan in `actions.md`, waits as loops. Write **as you go**: these files are the source of truth between sessions and after `/clear` |
+| Lots of material | `research-<topic>.md` (one topic per file, edited in place) via `lf note KEY research-<topic>` |
+| PR opened | `lf status KEY inreview` and a loop for the review |
 | Merged | `lf status KEY done` — only when the user says so |
 | End of session | `lf commit` — notes go into the vault's local git |
 
 The status in `notes.md` belongs to the user; the sync never moves it. When Jira is further along
 (e.g. the ticket was closed), `lf ls` shows `[Jira is ahead: done]` — mention it; the user changes
 the status.
+
+## Ticket files
+
+Each fact lives in one place:
+
+| File | What it holds | Rule |
+|---|---|---|
+| `ticket.md` | the Jira mirror | sync-owned, never edited |
+| `notes.md` | status (frontmatter), `## Decisions` (decision, date, source), `## Log` (one line per action) | the only place for status; the log is append-only |
+| `ai-summary.md` | understanding of the ticket | written at the start, edited in place (no "Update" blocks), ends with open questions |
+| `actions.md` | the plan only: phases, checkboxes, how to verify | no log, status or reference material; about 80 lines at most |
+| `research-<topic>.md` | optional, one topic per file | edited in place: a new finding replaces the old conclusion |
+| `<vault>/loops.md` | open loops, all tickets | next steps and waits live only here |
+| `<vault>/notes/repos/<repo>.md` | the repository, not the ticket: environment, build and test commands, process (labels, reviews), pitfalls | shared by every ticket with `repo: <repo>`; move repo knowledge here instead of copying it into tickets |
+
+A taken ticket has at least `ai-summary.md`, `actions.md` and one open loop. Do not keep "Status"
+or "What to say at the daily" blocks anywhere — `lf standup` produces them. Translate the ticket
+only when asked.
+
+In `ai-summary.md` and `research-*.md` every claim is marked: `(source: ticket / comment by X /
+log / Slack …)` for facts, `(inference)` for your conclusions. Never present an inference as a fact.
 
 ## Open loops
 
@@ -119,12 +140,17 @@ each; next steps and waits live **only** there (not in notes.md, not in actions.
 ## Note format in notes.md
 
 ```markdown
-## 2026-09-30
-- Decision: … (user)
-- Done: … — commit `abc1234`, branch `proj-123-…`
-- Open: …
+## Decisions
+
+- 2026-09-30 — Keep the old endpoint until v2 ships (source: the user; Mark in #ios)
+
+## Log
+
+- 2026-09-30 10:40 — Reproduced on iOS 26; the crash is in the swipe handler
+- 2026-09-30 16:05 — Done: fix pushed — commit `abc1234`, branch `proj-123-…`
 ```
-Quote the user's wording verbatim. Never rewrite earlier entries; only append.
+Quote the user's wording verbatim. Never rewrite earlier entries; only append. Older notes that use
+dated `## 2026-09-30` headings stay as they are.
 
 ## Local tickets
 

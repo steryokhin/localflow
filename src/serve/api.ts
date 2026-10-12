@@ -21,6 +21,7 @@ import { KEY_ONLY_RE, NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStu
 import type { Ticket } from "../vault/store.ts";
 import { LINKED_KEY, readLinkedFile, readLinkedFolders } from "../vault/links.ts";
 import type { LinkedFolder } from "../vault/links.ts";
+import { beginWork, repoOf } from "../vault/scaffold.ts";
 
 export const NOTES_DIR = "notes";
 /** Vault-root file with the groups the user created by hand (so empty groups can exist). */
@@ -324,6 +325,8 @@ export interface TicketView {
   files: string[];
   /** Folders outside the vault from `linked_folders:` in notes.md, listed fresh on every call. */
   linked: LinkedFolder[];
+  /** Shared repository notes from `repo:` in notes.md (notes/repos/<name>.md). */
+  repo: { name: string; rel: string; exists: boolean } | null;
   blocks: RenderedBlock[];
   unread: HistoryEvent[];
   seenDate: string | null;
@@ -379,6 +382,7 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     notes: t.notes,
     files,
     linked: readLinkedFolders(t.notes),
+    repo: repoOf(vault, t),
     blocks,
     unread,
     seenDate: seenCommit?.date ?? null,
@@ -399,10 +403,11 @@ export function setStatus(vault: string, rawKey: string, status: string): void {
   if (!(LOCAL_STATUSES as readonly string[]).includes(status)) throw new UserError(`Unknown status "${status}".`);
   const t = requireTicket(vault, rawKey);
   const notesPath = path.join(t.dir, NOTES_FILE);
-  const text = readTextIfExists(notesPath) ?? dumpFrontmatter({ ticket: t.key, status }) + `\n# ${t.key} — notes\n\n`;
+  const text = readTextIfExists(notesPath) ?? notesStub(t.key, status);
   const updates: Record<string, string> = { status };
   if (status === "inprogress" && parseFrontmatter(text).data.taken === undefined) updates.taken = today();
   writeFileAtomic(notesPath, setFrontmatterKeys(text, updates));
+  if (status === "inprogress") beginWork(vault, requireTicket(vault, t.key));
   refreshInbox(vault);
 }
 
@@ -474,6 +479,7 @@ export function setFrontmatter(vault: string, rawRel: string, updates: Record<st
   if (updates.group !== undefined || updates.parent !== undefined) {
     throw new UserError("Change group and parent through the group and hierarchy controls.");
   }
+  if (updates.tracked !== undefined) throw new UserError("Track and untrack tickets with `lf track` / `lf untrack`.");
   if (updates[LINKED_KEY] !== undefined) throw new UserError("Link and unlink folders with the folder controls (or `lf link`).");
   if (updates.status !== undefined && !(LOCAL_STATUSES as readonly string[]).includes(updates.status)) {
     throw new UserError(`Unknown status "${updates.status}".`);

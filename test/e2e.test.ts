@@ -202,7 +202,7 @@ test("daily report is built from git history and the session log", () => {
   const report = renderReport(vault, date);
   assert.match(report, /## From Jira \(2\)/);
   assert.match(report, /- \*\*DEMO-1\*\* Swipe approval does not work\n(    - .*\n)*    - \d\d:\d\d status Open → In Progress; description changed/);
-  assert.match(report, /## My work \(\d\)\n\n- \*\*DEMO-1\*\* .* — status inbox → inprogress; edited notes\.md, scratchpad\.md/);
+  assert.match(report, /## My work \(\d\)\n\n- \*\*DEMO-1\*\* .* — status inbox → inprogress; edited actions\.md, ai-summary\.md, notes\.md, scratchpad\.md/);
   assert.match(report, /## In progress now \(1\)\n\n- \*\*DEMO-1\*\*/);
   assert.match(report, /## Claude Code sessions \(1\)\n\n- 10:15 · `~\/work\/app` · clear · msgs: 12 · fix swipe/);
   assert.match(renderReport(vault, "2020-01-01"), /_No changes came from Jira._/);

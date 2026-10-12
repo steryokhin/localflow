@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   cmdBump, cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdDone, cmdInbox, cmdInit, cmdLink, cmdLog, cmdLoop, cmdLoops, cmdLs,
-  cmdNote, cmdOpen, cmdPath, cmdImport, cmdReport, cmdSeen, cmdServe, cmdStandup, cmdStart, cmdStatus, cmdSync, cmdTrack,
+  cmdNote, cmdOpen, cmdPath, cmdImport, cmdRepo, cmdReport, cmdSeen, cmdServe, cmdStandup, cmdStart, cmdStatus, cmdSync, cmdTrack,
   cmdUnlink, cmdWatch,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
@@ -31,7 +31,8 @@ What is new
 
 Work
   ls [--status S] [--mine] [--project P] [--unread] [--all]
-  start KEY                       status -> inprogress
+  start KEY                       status -> inprogress, tracked; creates ai-summary.md and actions.md
+  repo KEY [NAME]                 the ticket's repository: notes/repos/NAME.md, shared across tickets
   status KEY <inbox|inprogress|inreview|done|archived>
   note KEY NAME                   new note file in the ticket folder
   link KEY PATH                   link a folder outside the vault (shown in the ticket's web UI view)
@@ -182,6 +183,12 @@ async function main(argv: string[]): Promise<number> {
     case "start": {
       const { values, positionals } = parse(rest, {});
       cmdStart(resolveVault(values.vault as string | undefined), need(positionals[0], "lf start KEY"));
+      return 0;
+    }
+
+    case "repo": {
+      const { values, positionals } = parse(rest, {});
+      cmdRepo(resolveVault(values.vault as string | undefined), need(positionals[0], "lf repo KEY [NAME]"), positionals[1]);
       return 0;
     }
 

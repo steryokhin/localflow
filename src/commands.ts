@@ -23,6 +23,7 @@ import { linkFolder, unlinkFolder } from "./vault/links.ts";
 import { ME, addLoop, bumpLoop, closeLoop, syncLoops } from "./vault/loops.ts";
 import type { Loop } from "./vault/loops.ts";
 import { appendTicketLog, setTracked } from "./vault/notes.ts";
+import { beginWork, repoOf, setRepo } from "./vault/scaffold.ts";
 import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
@@ -221,8 +222,18 @@ export function cmdStatus(vault: string, rawKey: string, status: string, extra: 
 
 export function cmdStart(vault: string, rawKey: string): void {
   cmdStatus(vault, rawKey, "inprogress", { taken: today() });
+  for (const rel of beginWork(vault, requireTicket(vault, rawKey))) out(`  created ${rel}`);
+}
+
+export function cmdRepo(vault: string, rawKey: string, name: string | undefined): void {
   const t = requireTicket(vault, rawKey);
-  if (t.notes.tracked !== true) setTracked(t, true);
+  if (!name) {
+    const r = repoOf(vault, t);
+    out(r ? path.join(vault, r.rel) : `${t.key} has no repo: set it with \`lf repo ${t.key} NAME\``);
+    return;
+  }
+  const r = setRepo(vault, t, name);
+  out(`${t.key}: repo ${r.name} → ${path.join(vault, r.rel)}${r.created ? " (created)" : ""}`);
 }
 
 export function cmdPath(vault: string, rawKey: string): void {

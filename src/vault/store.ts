@@ -100,6 +100,7 @@ export function ticketRel(vault: string, key: string, title: string): string {
   return `${PROJECTS_DIR}/${projectOf(key)}/${existing ?? (slug ? `${key}-${slug}` : key)}`;
 }
 
+/** A new notes.md: status in the frontmatter, decisions, then the append-only log at the bottom. */
 export function notesStub(key: string, status: string): string {
-  return dumpFrontmatter({ ticket: key, status }) + `\n# ${key} — notes\n\n`;
+  return dumpFrontmatter({ ticket: key, status }) + `\n# ${key} — notes\n\n## Decisions\n\n## Log\n`;
 }
