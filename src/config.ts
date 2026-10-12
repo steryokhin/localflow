@@ -62,6 +62,15 @@ export interface Config {
     textFormat: "wiki" | "markdown";
   };
   projects: Record<string, ProjectConfig>;
+  /** Open loops (`lf loop`, `lf watch`). Every key is optional. */
+  loops?: {
+    /** No notifications in this window, e.g. "20:00-08:00" (the default). */
+    quietHours?: string;
+    /** No notifications on Saturday and Sunday (default true). */
+    quietWeekends?: boolean;
+    /** What `--by eod` means (default "18:00"). */
+    workdayEnd?: string;
+  };
 }
 
 export const DEFAULT_IGNORE_FIELDS = ["Rank", "Development", "Last Viewed"];
@@ -95,6 +104,7 @@ export function defaultConfig(opts: { jiraUrl?: string; project?: string; localP
       textFormat: opts.cloud ? "markdown" : "wiki",
     },
     projects,
+    loops: { quietHours: "20:00-08:00", quietWeekends: true, workdayEnd: "18:00" },
   };
 }
 

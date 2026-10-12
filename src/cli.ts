@@ -1,7 +1,8 @@
 import { parseArgs } from "node:util";
 import {
-  cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdInbox, cmdInit, cmdLink, cmdLs, cmdNote, cmdOpen, cmdPath,
-  cmdImport, cmdReport, cmdSeen, cmdServe, cmdStart, cmdStatus, cmdSync, cmdUnlink,
+  cmdBump, cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdDone, cmdInbox, cmdInit, cmdLink, cmdLog, cmdLoop, cmdLoops, cmdLs,
+  cmdNote, cmdOpen, cmdPath, cmdImport, cmdReport, cmdSeen, cmdServe, cmdStandup, cmdStart, cmdStatus, cmdSync, cmdTrack,
+  cmdUnlink, cmdWatch,
 } from "./commands.ts";
 import { resolveVault } from "./config.ts";
 import { UserError } from "./util.ts";
@@ -40,6 +41,18 @@ Work
   path KEY                        print the ticket folder path
   commit [-m MSG]                 commit your own files (notes) to the vault's local git
   serve [--port 7420] [--open]    local web UI on http://127.0.0.1:<port> (loopback only)
+
+Open loops (what I am waiting for, until when, and what to do then — kept in loops.md)
+  loop "TEXT" --by WHEN [--key KEY] [--from WHO] [--else "WHAT THEN"]
+                                  WHEN: +4h, +30m, +2d, 18:00, eod, tomorrow, 2026-10-14, "2026-10-14 12:00"
+  done ID|WORD ["outcome"]        close a loop; it goes to the ticket's ## Log
+  bump ID|WORD --by WHEN          move a deadline (logged)
+  log KEY "TEXT"                  a line in the ticket's ## Log, without a loop
+  loops                           rebuild and print ACTIONS.md (expired first)
+  watch [--quiet] [--plist]       one check: NUDGES.md + a macOS notification (--quiet: none);
+                                  --plist prints a launchd agent that runs it every 15 minutes
+  standup [--week]                done / doing / waiting / blockers, ready to paste
+  track KEY | untrack KEY         put a ticket on the loops board or take it off
 
 Reports
   report [--date YYYY-MM-DD] [--write]
@@ -204,6 +217,62 @@ async function main(argv: string[]): Promise<number> {
         need(positionals.slice(1).join(" "), usage),
         { type: values.type as string | undefined, priority: values.priority as string | undefined },
       );
+      return 0;
+    }
+
+    case "loop": {
+      const { values, positionals } = parse(rest, {
+        key: { type: "string" }, from: { type: "string" }, by: { type: "string" }, else: { type: "string" },
+      });
+      cmdLoop(resolveVault(values.vault as string | undefined), positionals.join(" "), {
+        key: values.key as string | undefined,
+        from: values.from as string | undefined,
+        by: values.by as string | undefined,
+        else: values.else as string | undefined,
+      });
+      return 0;
+    }
+
+    case "done": {
+      const { values, positionals } = parse(rest, {});
+      await cmdDone(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf done ID|WORD ["outcome"]'), positionals.slice(1).join(" "));
+      return 0;
+    }
+
+    case "bump": {
+      const { values, positionals } = parse(rest, { by: { type: "string" } });
+      cmdBump(resolveVault(values.vault as string | undefined), need(positionals[0], "lf bump ID|WORD --by WHEN"), values.by as string | undefined);
+      return 0;
+    }
+
+    case "log": {
+      const { values, positionals } = parse(rest, {});
+      cmdLog(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf log KEY "text"'), positionals.slice(1).join(" "));
+      return 0;
+    }
+
+    case "loops": {
+      const { values } = parse(rest, {});
+      cmdLoops(resolveVault(values.vault as string | undefined));
+      return 0;
+    }
+
+    case "watch": {
+      const { values } = parse(rest, { quiet: { type: "boolean" }, plist: { type: "boolean" } });
+      cmdWatch(resolveVault(values.vault as string | undefined), { quiet: values.quiet as boolean | undefined, plist: values.plist as boolean | undefined });
+      return 0;
+    }
+
+    case "standup": {
+      const { values } = parse(rest, { week: { type: "boolean" } });
+      cmdStandup(resolveVault(values.vault as string | undefined), !!values.week);
+      return 0;
+    }
+
+    case "track":
+    case "untrack": {
+      const { values, positionals } = parse(rest, {});
+      cmdTrack(resolveVault(values.vault as string | undefined), need(positionals[0], `lf ${command} KEY`), command === "track");
       return 0;
     }
 

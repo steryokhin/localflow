@@ -24,6 +24,7 @@ vault's git repository is local and has no remote. Full command list: `lf help`.
      `parent: KEY` (manual nesting in the UI list). Set by the web UI; leave them alone unless asked.
      `linked_folders:` (absolute paths of folders outside the vault shown with the ticket) is changed
      only with `lf link KEY PATH` / `lf unlink KEY PATH`, which validate the path.
+     `tracked: true` puts the ticket on the loops board; change it with `lf track` / `lf untrack`.
    - any other `*.md`, diagrams, scripts — yours and the user's; the sync never touches them.
 4. **Path to a ticket:** `lf path KEY`. From there use Read/Write/Edit on the files, not `cat`.
 
@@ -89,6 +90,31 @@ An empty inbox is a valid result: say "nothing new".
 The status in `notes.md` belongs to the user; the sync never moves it. When Jira is further along
 (e.g. the ticket was closed), `lf ls` shows `[Jira is ahead: done]` — mention it; the user changes
 the status.
+
+## Open loops
+
+An open loop is something the user did or asked for and is now waiting on: a PR out for review, a
+build sent to QA, a question to a manager, or their own promise. Four fields: what, from whom (`me`
+or a name), by when, what to do if the deadline passes. They live in `<vault>/loops.md`, one line
+each; next steps and waits live **only** there (not in notes.md, not in actions.md).
+
+- **You record them.** After any action in the conversation that leaves the user waiting
+  ("wrote to QA", "pushed the PR", "asked Mark"), add a loop right away and say it in one line:
+  `lf loop "PR #41 review" --key EXP-123 --from Tom --by +4h --else "ping in #ios-reviews"`
+  → "loop L3: waiting for Tom until 15:00, else ping in #ios-reviews". Pick a sensible deadline
+  and mention it; the user corrects it if needed. `lf loop` without `--key` is fine for loops
+  that have no ticket (onboarding, a question to someone).
+- **Close them** when the conversation shows the wait is over ("Tom approved"): `lf done L3 "Tom
+  approved, 2 comments"` — the line moves to the ticket's `## Log`. If a next wait follows, add it.
+- **Moving a deadline** is the user's call: `lf bump L3 --by tomorrow` only when they say so.
+- **Start of a session:** read `<vault>/NUDGES.md` (written by `lf watch` every 15 minutes) or run
+  `lf loops`, and if something expired, offer it first: "2 expired: ping Tom? move Lena's to
+  tomorrow?". Expired loops are the frog: they come before anything else.
+- **After working on a ticket**, one dated line of what happened: `lf log EXP-123 "split the fix
+  into two PRs"`.
+- Daily or weekly meeting: `lf standup` / `lf standup --week` and hand the output over as it is.
+- `lf watch --plist` prints a launchd agent for the 15-minute check; installing it is the user's
+  decision (`~/Library/LaunchAgents`, then `launchctl load`).
 
 ## Note format in notes.md
 

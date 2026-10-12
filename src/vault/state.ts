@@ -14,6 +14,8 @@ export interface State {
   lastSync: string | null;
   /** Ticket key -> sha of the vault commit the user has seen. */
   seen: Record<string, string>;
+  /** Last loop number handed out (`L<n>` in loops.md), so a closed loop's id is never reused. */
+  loopSeq?: number;
 }
 
 const STATE_FILE = "state.json";
@@ -33,7 +35,7 @@ function readJson<T>(vault: string, file: string, fallback: T): T {
 
 export function loadState(vault: string): State {
   const s = readJson<Partial<State>>(vault, STATE_FILE, {});
-  return { me: s.me ?? null, lastSync: s.lastSync ?? null, seen: s.seen ?? {} };
+  return { me: s.me ?? null, lastSync: s.lastSync ?? null, seen: s.seen ?? {}, ...(s.loopSeq ? { loopSeq: s.loopSeq } : {}) };
 }
 
 export function saveState(vault: string, state: State): void {

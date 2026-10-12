@@ -10,6 +10,7 @@ import { JiraClient } from "./jira/client.ts";
 import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
 import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox } from "./render/inbox.ts";
+import { ACTIONS_FILE, NUDGES_FILE, fmtDue, renderStandup } from "./render/loops.ts";
 import { renderReport } from "./report.ts";
 import { startServer } from "./serve/server.ts";
 import { runImport } from "./sync/import.ts";
@@ -19,6 +20,10 @@ import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, s
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
 import { linkFolder, unlinkFolder } from "./vault/links.ts";
+import { ME, addLoop, bumpLoop, closeLoop, syncLoops } from "./vault/loops.ts";
+import type { Loop } from "./vault/loops.ts";
+import { appendTicketLog, setTracked } from "./vault/notes.ts";
+import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
 
@@ -36,7 +41,7 @@ export function cmdInit(
   if (fs.existsSync(path.join(vault, CONFIG_FILE))) throw new UserError(`${vault} is already a Local Flow vault.`);
   fs.mkdirSync(path.join(vault, PROJECTS_DIR), { recursive: true });
   writeFileAtomic(path.join(vault, CONFIG_FILE), JSON.stringify(defaultConfig(opts), null, 2) + "\n");
-  writeFileAtomic(path.join(vault, ".gitignore"), `${STATE_DIR}/\n${INBOX_FILE}\n.DS_Store\n`);
+  writeFileAtomic(path.join(vault, ".gitignore"), `${STATE_DIR}/\n${INBOX_FILE}\n${ACTIONS_FILE}\n${NUDGES_FILE}\n.DS_Store\n`);
   if (!isRepo(vault)) initRepo(vault);
   assertLocalOnly(vault);
   commitPaths(vault, [CONFIG_FILE, ".gitignore"], "init: Local Flow vault");
@@ -216,6 +221,8 @@ export function cmdStatus(vault: string, rawKey: string, status: string, extra: 
 
 export function cmdStart(vault: string, rawKey: string): void {
   cmdStatus(vault, rawKey, "inprogress", { taken: today() });
+  const t = requireTicket(vault, rawKey);
+  if (t.notes.tracked !== true) setTracked(t, true);
 }
 
 export function cmdPath(vault: string, rawKey: string): void {
@@ -306,4 +313,91 @@ export async function cmdServe(vault: string, opts: { port?: number; open?: bool
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   });
+}
+
+// ---------- open loops ----------
+
+const workdayEnd = (vault: string): string | undefined => loadConfig(vault).loops?.workdayEnd;
+
+function describeLoop(l: Loop, now: Date): string {
+  const whom = l.owner === ME ? "on me" : `waiting for ${l.owner}`;
+  return `${l.id} · ${l.key ?? "no ticket"} · ${l.text} · ${whom} · by ${fmtDue(l.due, now)}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
+}
+
+export function cmdLoop(vault: string, text: string, opts: { key?: string; from?: string; by?: string; else?: string }): void {
+  if (!opts.by) throw new UserError('Every loop needs a deadline: --by +4h | 18:00 | eod | tomorrow | 2026-10-14 ["12:00"]');
+  const now = new Date();
+  const loop = addLoop(vault, { text, key: opts.key, owner: opts.from, by: opts.by, onExpiry: opts.else }, now, workdayEnd(vault));
+  refreshActions(vault, now);
+  out(`loop ${describeLoop(loop, now)}`);
+}
+
+async function ask(question: string): Promise<string> {
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(question)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+export async function cmdDone(vault: string, query: string, outcome: string): Promise<void> {
+  const now = new Date();
+  const { loop, loggedTo } = closeLoop(vault, query, outcome, now);
+  refreshActions(vault, now);
+  out(`closed ${loop.id}: ${loop.text} → ${loggedTo}`);
+  // Closing a loop usually opens the next one; asked only when a person is at the terminal.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    out(`Next step? lf loop "…" --by WHEN${loop.key ? ` --key ${loop.key}` : ""}`);
+    return;
+  }
+  const text = await ask(`Next loop${loop.key ? ` for ${loop.key}` : ""}? (empty to skip) `);
+  if (!text) return;
+  const by = await ask("By when? (+4h, 18:00, eod, tomorrow, 2026-10-14) ");
+  const from = await ask("Waiting for whom? (empty = me) ");
+  cmdLoop(vault, text, { key: loop.key ?? undefined, from: from || undefined, by: by || "eod" });
+}
+
+export function cmdBump(vault: string, query: string, by: string | undefined): void {
+  if (!by) throw new UserError("Usage: lf bump <id|word> --by WHEN");
+  const now = new Date();
+  const { loop, was } = bumpLoop(vault, query, by, now, workdayEnd(vault));
+  refreshActions(vault, now);
+  out(`${loop.id}: by ${fmtDue(loop.due, now)}${was ? ` (was ${was})` : ""} · ${loop.text}`);
+}
+
+export function cmdLog(vault: string, rawKey: string, text: string): void {
+  if (!text.trim()) throw new UserError('Usage: lf log KEY "what happened"');
+  const t = requireTicket(vault, rawKey);
+  appendTicketLog(t, nowStamp(), text);
+  if (t.notes.tracked !== true) setTracked(requireTicket(vault, t.key), true);
+  out(`${t.key}: logged`);
+}
+
+export function cmdLoops(vault: string): void {
+  refreshActions(vault, new Date());
+  process.stdout.write(fs.readFileSync(path.join(vault, ACTIONS_FILE), "utf8"));
+}
+
+export function cmdWatch(vault: string, opts: { plist?: boolean; quiet?: boolean }): void {
+  if (opts.plist) {
+    process.stdout.write(launchdPlist(vault));
+    return;
+  }
+  const r = watchOnce(vault, new Date(), { notify: !opts.quiet });
+  const note = r.notified ? " · notified" : r.quiet && (r.fresh.expired.length || r.fresh.soon.length) ? " · quiet hours, no notification" : "";
+  out(`expired ${r.expired.length} · within the hour ${r.soon.length}${note} → ${path.join(vault, NUDGES_FILE)}`);
+}
+
+export function cmdStandup(vault: string, week: boolean): void {
+  const now = new Date();
+  process.stdout.write(renderStandup(vault, syncLoops(vault), listTickets(vault), now, week));
+}
+
+export function cmdTrack(vault: string, rawKey: string, tracked: boolean): void {
+  const t = requireTicket(vault, rawKey);
+  setTracked(t, tracked);
+  refreshActions(vault, new Date());
+  out(`${t.key}: ${tracked ? "tracked" : "untracked"}`);
 }

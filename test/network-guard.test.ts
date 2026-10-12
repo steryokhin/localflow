@@ -45,8 +45,15 @@ test("the web UI server listens on the loopback interface only", () => {
   assert.deepEqual(filesMatching(/\.listen\(/), ["serve/server.ts"]);
 });
 
-test("processes are spawned only for git, the editor and the token command", () => {
-  assert.deepEqual(filesMatching(/node:child_process/), ["open.ts", "secret.ts", "vault/git.ts"]);
+test("processes are spawned only for git, the editor, the token command and local notifications", () => {
+  assert.deepEqual(filesMatching(/node:child_process/), ["notify.ts", "open.ts", "secret.ts", "vault/git.ts"]);
+});
+
+test("notifications run osascript only, without a shell", () => {
+  const notify = fs.readFileSync(path.join(SRC, "notify.ts"), "utf8");
+  const spawns = notify.match(/spawnSync\([^,]+/g) ?? [];
+  assert.deepEqual(spawns, ['spawnSync("osascript"']);
+  assert.doesNotMatch(notify, /shell\s*:\s*true|execSync|exec\(|\bsh\b/);
 });
 
 test("the token command runs without a shell and never captures more than stdout", () => {
