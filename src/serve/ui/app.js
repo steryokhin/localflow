@@ -1045,7 +1045,7 @@
     const build = () => {
       const old = scroll.querySelector(":scope > .toc");
       if (old) old.remove();
-      const heads = [...root.querySelectorAll(".md h1, .md h2, .md h3, .md h4")].filter((h) => h.textContent.trim());
+      const heads = [...root.querySelectorAll(".md h1, .md h2, .md h3, .md h4")].filter((h) => h.textContent.trim() && !h.closest(".was"));
       scroll.classList.toggle("hastoc", heads.length >= 2);
       if (heads.length < 2) return;
       const base = Math.min(...heads.map((h) => Number(h.tagName[1])));
