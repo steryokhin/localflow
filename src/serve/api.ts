@@ -8,7 +8,7 @@ import type { Config } from "../config.ts";
 import { LOCAL_STATUSES } from "../jira/mapping.ts";
 import { diffBlocks } from "../render/blockdiff.ts";
 import type { DiffBlock } from "../render/blockdiff.ts";
-import { jiraAhead, priorityOf, refreshInbox } from "../render/inbox.ts";
+import { jiraAhead, priorityOf, refreshInbox, waitingLine } from "../render/inbox.ts";
 import { renderBlock, splitBlocks } from "../render/markdown.ts";
 import { UserError, readTextIfExists, slugify, today, writeFileAtomic } from "../util.ts";
 import { dumpFrontmatter, parseFrontmatter, removeFrontmatterKeys, setFrontmatterKeys } from "../vault/frontmatter.ts";
@@ -24,6 +24,10 @@ import type { Ticket } from "../vault/store.ts";
 import { LINKED_KEY, readLinkedFile, readLinkedFolders } from "../vault/links.ts";
 import type { LinkedFolder } from "../vault/links.ts";
 import { beginWork, repoOf } from "../vault/scaffold.ts";
+import { readLoops } from "../vault/loops.ts";
+import type { Loop } from "../vault/loops.ts";
+import { isTracked } from "../vault/notes.ts";
+import { waitingByKey } from "../vault/smart.ts";
 
 export const NOTES_DIR = "notes";
 /** Vault-root file with the groups the user created by hand (so empty groups can exist). */
@@ -83,6 +87,10 @@ export interface TicketRow {
   parent: string | null;
   /** For unread tickets: the first thing that changed ("Tom commented: «…»"), else null. */
   change: string | null;
+  /** `tracked: true` in notes.md. */
+  tracked: boolean;
+  /** Open loops waiting on someone else: "Tom: PR review · by 18:00". */
+  waiting: string[];
 }
 
 export interface GroupInfo {
@@ -113,7 +121,8 @@ export interface Overview {
   canSync: boolean;
 }
 
-function row(t: Ticket, config: Config, unread: number, change: Change[] = []): TicketRow {
+function row(t: Ticket, config: Config, unread: number, change: Change[] = [], waiting: Loop[] = []): TicketRow {
+  const now = new Date();
   return {
     key: t.key,
     project: t.project,
@@ -132,6 +141,8 @@ function row(t: Ticket, config: Config, unread: number, change: Change[] = []): 
     group: groupOf(t),
     parent: parentOf(t),
     change: change.length ? changeLine(byImportance(change)[0]) + (change.length > 1 ? ` · +${change.length - 1} more` : "") : null,
+    tracked: isTracked(t),
+    waiting: waiting.map((l) => waitingLine(l, now)),
   };
 }
 
@@ -168,7 +179,8 @@ export function overview(vault: string): Overview {
   const unread = unreadByTicket(vault, state);
   const all = listTickets(vault);
   const changes = unreadChanges(vault, all, unread.keys(), config, state);
-  const tickets = all.map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0, changes.get(t.key)) }));
+  const waiting = waitingByKey(readLoops(vault));
+  const tickets = all.map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0, changes.get(t.key), waiting.get(t.key)) }));
   return {
     vault,
     lastSync: state.lastSync,
@@ -386,7 +398,7 @@ export function ticketView(vault: string, rawKey: string): TicketView {
   const seenCommit = seenSha ? log(vault).find((c) => c.sha === seenSha) : undefined;
   const changes = unread.length ? ticketChanges(vault, t, seenSha ?? null, { config, state }).items : [];
   return {
-    row: row(t, config, unread.length, changes),
+    row: row(t, config, unread.length, changes, waitingByKey(readLoops(vault)).get(t.key)),
     rel: t.rel,
     fm: t.fm,
     notes: t.notes,
@@ -477,8 +489,11 @@ export function saveFile(vault: string, rawRel: string, body: string, headText: 
   const rel = safeRel(rawRel);
   if (!isUserEditable(vault, rel)) throw new UserError(`${rel} is not editable here.`);
   const normalized = body.replace(/\r\n?/g, "\n").replace(/\s+$/, "") + "\n";
-  writeFileAtomic(path.join(vault, rel), headText + normalized);
-  if (rel.endsWith(`/${NOTES_FILE}`)) refreshInbox(vault);
+  // A first edit of a ticket's notes.md puts it in "Tracking"; an explicit untrack is respected.
+  const isNotes = rel.startsWith(`${PROJECTS_DIR}/`) && rel.endsWith(`/${NOTES_FILE}`);
+  const head = isNotes && parseFrontmatter(headText).data.tracked === undefined && FM_RE.test(headText) ? setFrontmatterKeys(headText, { tracked: true }) : headText;
+  writeFileAtomic(path.join(vault, rel), head + normalized);
+  if (isNotes) refreshInbox(vault);
 }
 
 export function setFrontmatter(vault: string, rawRel: string, updates: Record<string, string>): void {

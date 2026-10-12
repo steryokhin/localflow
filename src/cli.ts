@@ -25,7 +25,8 @@ Sync
                                   same, from issue JSON an agent fetched (e.g. via Rovo); "-" reads stdin
 
 What is new
-  inbox                           tickets changed since you last looked
+  inbox [--group G]               tickets changed since you last looked; --group activity | mine |
+                                  tracked | waiting lists a smart group instead
   diff KEY [--since COMMIT|DATE] [--git [git diff options]]
                                   what exactly changed: fields was → now, comments, attachments,
                                   text; since you last looked unless --since; --git: raw git diff
@@ -145,8 +146,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "inbox": {
-      const { values } = parse(rest, {});
-      cmdInbox(resolveVault(values.vault as string | undefined));
+      const { values } = parse(rest, { group: { type: "string" } });
+      cmdInbox(resolveVault(values.vault as string | undefined), values.group as string | undefined);
       return 0;
     }
 

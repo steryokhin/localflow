@@ -4,12 +4,13 @@ import {
   CONFIG_FILE, DEFAULT_VAULT, INBOX_FILE, PROJECTS_DIR, STATE_DIR,
   defaultConfig, loadConfig, readToken, tokenSource,
 } from "./config.ts";
+import type { Config } from "./config.ts";
 import { getMyself, probeSearch } from "./jira/api.ts";
 import { ATTACHMENTS_DIR } from "./jira/attachments.ts";
 import { JiraClient } from "./jira/client.ts";
 import { LOCAL_STATUSES } from "./jira/mapping.ts";
 import { openInEditor } from "./open.ts";
-import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox, unreadLines } from "./render/inbox.ts";
+import { BOARD_ORDER, jiraAhead, priorityOf, refreshInbox, unreadLines, waitingLine } from "./render/inbox.ts";
 import { ACTIONS_FILE, NUDGES_FILE, fmtDue, renderStandup } from "./render/loops.ts";
 import { renderReport } from "./report.ts";
 import { startServer } from "./serve/server.ts";
@@ -22,13 +23,17 @@ import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, s
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
 import { linkFolder, unlinkFolder } from "./vault/links.ts";
-import { ME, addLoop, bumpLoop, closeLoop, syncLoops } from "./vault/loops.ts";
+import { ME, addLoop, bumpLoop, closeLoop, readLoops, syncLoops } from "./vault/loops.ts";
 import type { Loop } from "./vault/loops.ts";
 import { appendTicketLog, setTracked } from "./vault/notes.ts";
 import { beginWork, repoOf, setRepo } from "./vault/scaffold.ts";
 import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
+import type { State, UnreadEvent } from "./vault/state.ts";
+import { SMART_GROUPS, inSmartGroup, waitingByKey } from "./vault/smart.ts";
+import type { SmartGroup } from "./vault/smart.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
+import type { Ticket } from "./vault/store.ts";
 
 // Ticket text comes from other people (Jira titles, comments): control characters are dropped
 // before anything reaches the terminal, so an escape sequence in a comment cannot drive it.
@@ -137,23 +142,45 @@ function printReport(vault: string, report: SyncReport, dryRun: boolean): void {
   if (report.commit) out(`Commit: ${report.commit.slice(0, 10)}  (see \`lf inbox\`, \`lf diff KEY\`)`);
 }
 
-export function cmdInbox(vault: string): void {
+export function cmdInbox(vault: string, group?: string): void {
   const config = loadConfig(vault);
   const state = loadState(vault);
-  const tickets = new Map(listTickets(vault).map((t) => [t.key, t]));
+  const tickets = listTickets(vault);
   const unread = unreadByTicket(vault, state);
   refreshInbox(vault);
+  if (group !== undefined) return printSmartGroup(vault, group, tickets, unread, config, state);
   if (unread.size === 0) {
     out("Nothing new.");
     return;
   }
-  const changes = unreadChanges(vault, [...tickets.values()], unread.keys(), config, state);
+  const byKey = new Map(tickets.map((t) => [t.key, t]));
+  const changes = unreadChanges(vault, tickets, unread.keys(), config, state);
   for (const [key, events] of unread) {
-    out(`${key}  ${tickets.get(key)?.title ?? "(ticket folder missing)"}`);
+    out(`${key}  ${byKey.get(key)?.title ?? "(ticket folder missing)"}`);
     for (const line of unreadLines(events, changes.get(key))) out(`    ${line}`);
   }
   out();
   out(`${unread.size} unread. \`lf diff KEY\` shows the changes, \`lf seen KEY\` / \`lf seen --all\` marks them read.`);
+}
+
+function printSmartGroup(
+  vault: string, raw: string, tickets: Ticket[], unread: Map<string, UnreadEvent[]>, config: Config, state: State,
+): void {
+  const group = (raw === "tracking" ? "tracked" : raw) as SmartGroup;
+  if (!SMART_GROUPS.includes(group)) throw new UserError(`Unknown group "${raw}". Use one of: ${SMART_GROUPS.join(", ")}.`);
+  const waiting = waitingByKey(readLoops(vault));
+  const members = tickets.filter((t) => inSmartGroup(group, t, unread.has(t.key), waiting));
+  if (!members.length) {
+    out(`Nothing in "${group}".`);
+    return;
+  }
+  const changes = unreadChanges(vault, members, members.map((t) => t.key).filter((k) => unread.has(k)), config, state);
+  const now = new Date();
+  for (const t of members) {
+    out(`${unread.has(t.key) ? "●" : " "} ${t.key}  ${t.title}  [${t.status}]`);
+    if (unread.has(t.key)) for (const line of unreadLines(unread.get(t.key)!, changes.get(t.key))) out(`      ${line}`);
+    for (const l of waiting.get(t.key) ?? []) out(`      ⏳ ${waitingLine(l, now)}`);
+  }
 }
 
 export function cmdSeen(vault: string, keys: string[], all: boolean): void {
@@ -448,7 +475,8 @@ export function cmdLog(vault: string, rawKey: string, text: string): void {
   if (!text.trim()) throw new UserError('Usage: lf log KEY "what happened"');
   const t = requireTicket(vault, rawKey);
   appendTicketLog(t, nowStamp(), text);
-  if (t.notes.tracked !== true) setTracked(requireTicket(vault, t.key), true);
+  // A first note puts the ticket on the board; an explicit `lf untrack` is respected.
+  if (t.notes.tracked === undefined) setTracked(requireTicket(vault, t.key), true);
   out(`${t.key}: logged`);
 }
 

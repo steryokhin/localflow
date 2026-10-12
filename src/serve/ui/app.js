@@ -15,7 +15,8 @@
   const STATUS_LABELS = { inbox: "Inbox", inprogress: "In progress", inreview: "In review", done: "Done", archived: "Archived" };
   const NAV_STATUSES = ["inbox", "inprogress", "inreview", "done"];
   const OPEN_STATUSES = ["inbox", "inprogress", "inreview"];
-  // "open" = inbox + inprogress + inreview, "all" = everything but archived, "status:X" = one status.
+  // "open" = inbox + inprogress + inreview, "all" = everything but archived, "status:X" = one status,
+  // "smart:X" = a smart group (activity, mine, tracked, waiting).
   const FILTER_KEY = "lf.status";
   // The selected group is the master context: "" means All, otherwise a group name.
   const GROUP_KEY = "lf.group";
@@ -87,7 +88,7 @@
 
   const state = {
     overview: null,
-    filter: /^(open|all|status:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
+    filter: /^(open|all|status:[a-z]+|smart:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
     group: store(GROUP_KEY) || "",
     collapsed: new Set(readList(COLLAPSED_KEY)),
     linkedCollapsed: new Set(readList(LINKED_COLLAPSED_KEY)),
@@ -161,7 +162,18 @@
     return state.group ? all.filter((t) => t.group === state.group) : all;
   }
 
+  const SMART = [
+    { id: "activity", ico: "✦", label: "Activity", title: "Unread changes in your and tracked tickets", test: (t) => t.unread > 0 && (t.mine || t.tracked) },
+    { id: "mine", ico: "◉", label: "Mine", title: "Assigned to you, still open", test: (t) => t.mine && t.status !== "done" && t.status !== "archived" },
+    { id: "tracked", ico: "☆", label: "Tracking", title: "Tracked (lf track, a loop, a note), still open", test: (t) => t.tracked && t.status !== "done" && t.status !== "archived" },
+    { id: "waiting", ico: "⏳", label: "Waiting", title: "Open loops waiting on someone else", test: (t) => t.waiting.length > 0 },
+  ];
+
   function byFilter(rows, f) {
+    if (f.startsWith("smart:")) {
+      const g = SMART.find((x) => x.id === f.slice(6));
+      return g ? rows.filter(g.test) : rows.filter(isOpen);
+    }
     if (f.startsWith("status:")) return rows.filter((t) => t.status === f.slice(7));
     if (f === "all") return rows.filter((t) => t.status !== "archived");
     return rows.filter(isOpen);
@@ -176,7 +188,8 @@
 
   function filterTitle() {
     const f = state.filter;
-    const what = f.startsWith("status:") ? STATUS_LABELS[f.slice(7)] || f.slice(7) : f === "open" ? "Open" : "";
+    const smart = f.startsWith("smart:") ? SMART.find((x) => x.id === f.slice(6)) : null;
+    const what = smart ? smart.label : f.startsWith("status:") ? STATUS_LABELS[f.slice(7)] || f.slice(7) : f === "open" ? "Open" : "";
     return (state.group || "All") + (what ? ` · ${what}` : "");
   }
 
@@ -243,6 +256,15 @@
     h += `<h5>Groups<button class="plus" id="addgroup" title="New group" aria-label="New group">+</button></h5><div id="newgroup"></div>`;
     h += groupRow("", "All", all.filter(isOpen).length, unreadOf(all), false);
     for (const g of o.groups) h += groupRow(g.name, g.name, g.open, g.unread, g.removable);
+    h += "<h5>Smart</h5>";
+    for (const g of SMART) {
+      const rows = scoped.filter(g.test);
+      // Activity counts what is unread; the others count tickets (and show unread on top).
+      const badge = g.id === "activity"
+        ? (rows.length ? `<span class="u" title="${rows.length} with unread changes">${rows.length}</span>` : `<span class="n">0</span>`)
+        : badges(rows.length, unreadOf(rows));
+      h += `<button class="nl${state.filter === `smart:${g.id}` ? " on" : ""}" data-filter="smart:${g.id}" title="${esc(g.title)}"><span class="ico">${g.ico}</span>${esc(g.label)}${badge}</button>`;
+    }
     h += "<h5>Status</h5>";
     h += item("all", "◧", "All", scoped.filter((t) => t.status !== "archived"));
     h += item("open", "◨", "All open", scoped.filter(isOpen));
@@ -397,7 +419,8 @@
         (t.unread ? `<span class="dot" title="${t.unread} unread change${t.unread === 1 ? "" : "s"}"></span>` : "<span></span>") +
         `<div class="ti">${esc(t.title)}</div>` +
         (t.unread && t.change ? `<div class="chl" title="${esc(t.change)}">${esc(t.change)}</div>` : "") +
-        `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}</div></div>`;
+        `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}` +
+        (t.waiting.length ? `<span class="wt" title="${esc(t.waiting.join("\n"))}">⏳ ${esc(t.waiting[0].split(":")[0])}${t.waiting.length > 1 ? ` +${t.waiting.length - 1}` : ""}</span>` : "") + `</div></div>`;
     }
     h += `<div class="unnest">Drop here to un-nest</div>`;
     $("list").innerHTML = h + "</div>";

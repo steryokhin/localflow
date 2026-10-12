@@ -145,7 +145,7 @@ test("Jira changes are summarized, committed, and never touch user notes", async
 
   assert.deepEqual([...unread().keys()], ["DEMO-1"]);
   assert.equal(findTicket(vault, "DEMO-1")!.status, "inprogress");
-  assert.match(read("INBOX.md"), /## Unread \(1\)/);
+  assert.match(read("INBOX.md"), /## Activity \(1\)\n\n- \[DEMO-1\]/);
 });
 
 test("a ticket that left the query is still refreshed (closed in Jira)", async () => {

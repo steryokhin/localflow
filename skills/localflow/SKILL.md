@@ -170,6 +170,8 @@ the report — `lf commit` first.
 
 ## Board and search
 
+- `lf inbox --group activity|mine|tracked|waiting` — smart groups: unread changes in the user's and
+  tracked tickets, assigned to them, tracked, waiting on someone. `INBOX.md` has them in that order.
 - `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.
 - Text search — Grep over `projects/**/ticket.md` and `notes.md`. There is deliberately no vector search.
 
