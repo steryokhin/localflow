@@ -126,6 +126,18 @@ test("the web UI gets the changes for the open ticket and a one-line summary in 
   assert.equal(overview(vault).tickets.find((r) => r.key === "DEMO-1")!.change, null);
 });
 
+test("terminal output drops control characters from Jira text", async () => {
+  const issue = jira.issues.get("DEMO-1")!;
+  issue.fields.comment.comments.push(makeComment(3, "Mallory", "hi\u001b]52;c;ZXZpbA==\u0007 \u001b[2Jthere", "2026-09-04T10:00:00.000+0000"));
+  issue.fields.updated = "2026-09-04T10:00:00.000+0000";
+  await runSync(vault, config);
+  printed.length = 0;
+  cmdDiff(vault, "DEMO-1", {});
+  const text = printed.join("\n");
+  assert.match(text, /Mallory/);
+  assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+});
+
 test("plainText flattens wiki and Markdown to one line", () => {
   assert.equal(plainText("h3. Title\n* one\n* two [link|https://x.invalid]", "wiki"), "Title one two link");
   assert.equal(plainText("**bold** and `code`\n\n![](a.png)", "markdown"), "bold and code [image]");

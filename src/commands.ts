@@ -30,7 +30,11 @@ import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
 
-const out = (line = ""): void => console.log(line);
+// Ticket text comes from other people (Jira titles, comments): control characters are dropped
+// before anything reaches the terminal, so an escape sequence in a comment cannot drive it.
+const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+export const terminalSafe = (s: string): string => s.replace(CONTROL_RE, "");
+const out = (line = ""): void => console.log(terminalSafe(line));
 
 export function cmdInit(
   target: string | undefined,
@@ -349,7 +353,7 @@ export function cmdReport(vault: string, opts: { date?: string; write?: boolean 
     out(file);
     return;
   }
-  process.stdout.write(text);
+  process.stdout.write(terminalSafe(text));
 }
 
 export function cmdCreate(vault: string, prefix: string, title: string, opts: { type?: string; priority?: string }): void {
@@ -450,7 +454,7 @@ export function cmdLog(vault: string, rawKey: string, text: string): void {
 
 export function cmdLoops(vault: string): void {
   refreshActions(vault, new Date());
-  process.stdout.write(fs.readFileSync(path.join(vault, ACTIONS_FILE), "utf8"));
+  process.stdout.write(terminalSafe(fs.readFileSync(path.join(vault, ACTIONS_FILE), "utf8")));
 }
 
 export function cmdWatch(vault: string, opts: { plist?: boolean; quiet?: boolean }): void {
@@ -465,7 +469,7 @@ export function cmdWatch(vault: string, opts: { plist?: boolean; quiet?: boolean
 
 export function cmdStandup(vault: string, week: boolean): void {
   const now = new Date();
-  process.stdout.write(renderStandup(vault, syncLoops(vault), listTickets(vault), now, week));
+  process.stdout.write(terminalSafe(renderStandup(vault, syncLoops(vault), listTickets(vault), now, week)));
 }
 
 export function cmdTrack(vault: string, rawKey: string, tracked: boolean): void {
