@@ -15,11 +15,14 @@
   const STATUS_LABELS = { inbox: "Inbox", inprogress: "In progress", inreview: "In review", done: "Done", archived: "Archived" };
   const NAV_STATUSES = ["inbox", "inprogress", "inreview", "done"];
   const OPEN_STATUSES = ["inbox", "inprogress", "inreview"];
-  // "open" = inbox + inprogress + inreview, "all" = everything but archived, "status:X" = one status,
-  // "smart:X" = a smart group (activity, mine, tracked, waiting).
+  // "open" = inbox + inprogress + inreview, "all" = everything but archived, "status:X" = one status.
+  // It applies inside the current context: a group, or a smart folder.
   const FILTER_KEY = "lf.status";
-  // The selected group is the master context: "" means All, otherwise a group name.
+  // The context is either a group ("" means All) or a smart folder (its id); picking one clears the other.
   const GROUP_KEY = "lf.group";
+  const SMART_KEY = "lf.smart";
+  // Which status the Status section and the filters go by: "local" (mine, notes.md) or "jira".
+  const STATUS_BY_KEY = "lf.statusBy";
   // Keys of tickets whose children are folded away in the list.
   const COLLAPSED_KEY = "lf.collapsed";
   // Linked folders (absolute paths) whose file lists are folded away in the folder pane.
@@ -88,8 +91,13 @@
 
   const state = {
     overview: null,
-    filter: /^(open|all|status:[a-z]+|smart:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
+    filter: /^(open|all|status:[a-z]+)$/.test(store(FILTER_KEY) || "") ? store(FILTER_KEY) : "open",
     group: store(GROUP_KEY) || "",
+    smart: store(SMART_KEY) || "",
+    statusBy: store(STATUS_BY_KEY) === "jira" ? "jira" : "local",
+    alignConfirm: false, // the bulk "Align N" button is asking for confirmation
+    loopForm: null,      // { id, kind: "done" | "bump" } of the loop whose inline form is open
+    standupWeek: false,
     collapsed: new Set(readList(COLLAPSED_KEY)),
     linkedCollapsed: new Set(readList(LINKED_COLLAPSED_KEY)),
     confirmGroup: null, // group whose "Delete? Yes/No" is showing
@@ -107,10 +115,12 @@
   function parseHash() {
     const h = decodeURIComponent(location.hash.replace(/^#/, ""));
     let m;
-    if ((m = /^\/t\/([A-Z][A-Z0-9_]*-\d+)(?:\/(history)|\/f\/(.+)|\/x\/(\/.+))?$/.exec(h))) {
-      const item = m[2] ? "history" : m[3] ? "file" : m[4] ? "linked" : "task";
+    if ((m = /^\/t\/([A-Z][A-Z0-9_]*-\d+)(?:\/(history|loops)|\/f\/(.+)|\/x\/(\/.+))?$/.exec(h))) {
+      const item = m[2] ? m[2] : m[3] ? "file" : m[4] ? "linked" : "task";
       return { kind: "ticket", key: m[1], item, file: m[3] || m[4] || null };
     }
+    if (h === "/loops") return { kind: "loops" };
+    if (h === "/standup") return { kind: "standup" };
     if ((m = /^\/n\/(.+)$/.exec(h))) return { kind: "note", rel: m[1] };
     return { kind: "none" };
   }
@@ -128,6 +138,16 @@
     const warn = row.ahead ? " warn" : "";
     const title = row.ahead ? "Jira is ahead of your status" : "Jira status";
     return `<span class="jl">Jira</span><span class="js ${cls}${warn}" title="${title}">${esc(row.jiraStatus)}${row.ahead ? " ⚠" : ""}</span>`;
+  }
+
+  /** "Jira: In Progress · Mine: Inbox", with a ≠ mark when they disagree. */
+  function statusPair(row) {
+    const mine = `<span class="ms${row.mismatch ? " warn" : ""}" title="Your status (notes.md)">Mine: ${esc(STATUS_LABELS[row.status] || row.status)}</span>`;
+    if (row.source !== "jira") return jiraChip(row) + mine;
+    const mark = row.mismatch
+      ? `<span class="mm" title="Jira says ${esc(STATUS_LABELS[row.jiraLocal] || row.jiraLocal)}, you say ${esc(STATUS_LABELS[row.status] || row.status)}. Align copies Jira's status into yours.">≠</span>`
+      : "";
+    return jiraChip(row) + mark + mine;
   }
 
   function prioChip(p) {
@@ -154,33 +174,33 @@
     return label;
   }
 
-  const isOpen = (t) => OPEN_STATUSES.includes(t.status);
+  /** The status the filters go by: mine, or Jira's in local terms (what Align would set). */
+  const statusOf = (t) => (state.statusBy === "jira" && t.jiraLocal ? t.jiraLocal : t.status);
+  const isOpen = (t) => OPEN_STATUSES.includes(statusOf(t));
 
-  /** Tickets of the current group (all of them when the group is All). */
-  function groupTickets() {
+  function smartFolder() {
+    return state.smart ? state.overview.smartFolders.find((f) => f.id === state.smart) || null : null;
+  }
+
+  /** Tickets of the current context: a smart folder (over the whole vault), else the group (All when none). */
+  function contextTickets() {
     const all = state.overview.tickets;
+    const f = smartFolder();
+    if (f) {
+      const keys = new Set(f.keys);
+      return all.filter((t) => keys.has(t.key));
+    }
     return state.group ? all.filter((t) => t.group === state.group) : all;
   }
 
-  const SMART = [
-    { id: "activity", ico: "✦", label: "Activity", title: "Unread changes in your and tracked tickets", test: (t) => t.unread > 0 && (t.mine || t.tracked) },
-    { id: "mine", ico: "◉", label: "Mine", title: "Assigned to you, still open", test: (t) => t.mine && t.status !== "done" && t.status !== "archived" },
-    { id: "tracked", ico: "☆", label: "Tracking", title: "Tracked (lf track, a loop, a note), still open", test: (t) => t.tracked && t.status !== "done" && t.status !== "archived" },
-    { id: "waiting", ico: "⏳", label: "Waiting", title: "Open loops waiting on someone else", test: (t) => t.waiting.length > 0 },
-  ];
-
   function byFilter(rows, f) {
-    if (f.startsWith("smart:")) {
-      const g = SMART.find((x) => x.id === f.slice(6));
-      return g ? rows.filter(g.test) : rows.filter(isOpen);
-    }
-    if (f.startsWith("status:")) return rows.filter((t) => t.status === f.slice(7));
-    if (f === "all") return rows.filter((t) => t.status !== "archived");
+    if (f.startsWith("status:")) return rows.filter((t) => statusOf(t) === f.slice(7));
+    if (f === "all") return rows.filter((t) => statusOf(t) !== "archived");
     return rows.filter(isOpen);
   }
 
   function visibleTickets() {
-    let rows = byFilter(groupTickets(), state.filter);
+    let rows = byFilter(contextTickets(), state.filter);
     const q = state.query.trim().toLowerCase();
     if (q) rows = rows.filter((t) => `${t.key} ${t.title} ${t.assignee}`.toLowerCase().includes(q));
     return rows;
@@ -188,9 +208,10 @@
 
   function filterTitle() {
     const f = state.filter;
-    const smart = f.startsWith("smart:") ? SMART.find((x) => x.id === f.slice(6)) : null;
-    const what = smart ? smart.label : f.startsWith("status:") ? STATUS_LABELS[f.slice(7)] || f.slice(7) : f === "open" ? "Open" : "";
-    return (state.group || "All") + (what ? ` · ${what}` : "");
+    const what = f.startsWith("status:") ? STATUS_LABELS[f.slice(7)] || f.slice(7) : f === "open" ? "Open" : "";
+    const by = f.startsWith("status:") && state.statusBy === "jira" ? " (Jira)" : "";
+    const ctx = smartFolder() ? smartFolder().name : state.group || "All";
+    return ctx + (what ? ` · ${what}${by}` : "");
   }
 
   /** A group that no longer exists (deleted, or its last ticket moved away) falls back to All. */
@@ -198,6 +219,10 @@
     if (state.group && !state.overview.groups.some((g) => g.name === state.group)) {
       state.group = "";
       save(GROUP_KEY, "");
+    }
+    if (state.smart && !smartFolder()) {
+      state.smart = "";
+      save(SMART_KEY, "");
     }
   }
 
@@ -236,14 +261,14 @@
   function renderNav() {
     const o = state.overview;
     const all = o.tickets;
-    const scoped = groupTickets();
+    const scoped = contextTickets();
     const unreadOf = (rows) => rows.reduce((n, t) => n + (t.unread ? 1 : 0), 0);
     const badges = (open, unread) =>
       `<span class="n">${open}</span>` + (unread ? `<span class="u" title="${unread} unread">${unread}</span>` : "");
     const item = (key, ico, label, rows) =>
       `<button class="nl${state.filter === key ? " on" : ""}" data-filter="${esc(key)}"><span class="ico">${ico}</span>${esc(label)}${badges(rows.length, unreadOf(rows))}</button>`;
     const groupRow = (name, label, open, unread, removable) => {
-      const on = state.group === name;
+      const on = !state.smart && state.group === name;
       if (name && state.confirmGroup === name) {
         return `<div class="nl grp on" data-group="${esc(name)}"><span class="gn">Delete “${esc(name)}”?</span>` +
           `<span class="yn"><button class="btn" data-gdel="yes">Yes</button><button class="btn ghost" data-gdel="no">No</button></span></div>`;
@@ -252,31 +277,58 @@
         `<span class="ico">${name ? "▦" : "◧"}</span><span class="gn">${esc(label)}</span>${badges(open, unread)}` +
         (removable ? `<button class="gx" data-gx="${esc(name)}" title="Delete group (tickets stay)" aria-label="Delete group ${esc(name)}">×</button>` : "") + "</div>";
     };
+    const r = state.route;
+    const lc = o.loopCounts;
     let h = `<div class="brand">${ICON.logo}Local Flow<span class="sync" title="Last sync">${o.lastSync ? "Synced " + fmtTime(o.lastSync) : ""}</span></div>`;
+    h += `<button class="nl${r.kind === "loops" ? " on" : ""}" data-route="#/loops" title="Open loops: expired, due today, on me, waiting on people"><span class="ico">⟳</span>Loops` +
+      `<span class="n">${lc.expired || lc.today ? "" : 0}</span>` +
+      (lc.expired ? `<span class="ux" title="${lc.expired} expired">${lc.expired}</span>` : "") +
+      (lc.today ? `<span class="u" title="${lc.today} due today">${lc.today}</span>` : "") + `</button>`;
+    h += `<button class="nl${r.kind === "standup" ? " on" : ""}" data-route="#/standup" title="Done / doing / waiting / blockers, ready to paste"><span class="ico">☰</span>Standup</button>`;
     h += `<h5>Groups<button class="plus" id="addgroup" title="New group" aria-label="New group">+</button></h5><div id="newgroup"></div>`;
     h += groupRow("", "All", all.filter(isOpen).length, unreadOf(all), false);
     for (const g of o.groups) h += groupRow(g.name, g.name, g.open, g.unread, g.removable);
+    // Smart folders are siblings of groups: their content and counts cover the whole vault.
     h += "<h5>Smart</h5>";
-    for (const g of SMART) {
-      const rows = scoped.filter(g.test);
-      // Activity counts what is unread; the others count tickets (and show unread on top).
-      const badge = g.id === "activity"
-        ? (rows.length ? `<span class="u" title="${rows.length} with unread changes">${rows.length}</span>` : `<span class="n">0</span>`)
-        : badges(rows.length, unreadOf(rows));
-      h += `<button class="nl${state.filter === `smart:${g.id}` ? " on" : ""}" data-filter="smart:${g.id}" title="${esc(g.title)}"><span class="ico">${g.ico}</span>${esc(g.label)}${badge}</button>`;
+    for (const f of o.smartFolders) {
+      const unread = f.unread ? `<span class="u" title="${f.unread} with unread changes">${f.unread}</span>` : "";
+      const badge = f.error ? `<span class="n"></span><span class="ux" title="${esc(f.error)}">!</span>` : `<span class="n">${f.keys.length}</span>${unread}`;
+      const title = f.error ? `Filter error: ${f.error} — fix "smartFolders" in localflow.json` : f.filter;
+      h += `<button class="nl${state.smart === f.id ? " on" : ""}" data-smart="${esc(f.id)}" title="${esc(title)}"><span class="ico">${esc(f.icon)}</span>${esc(f.name)}${badge}</button>`;
     }
-    h += "<h5>Status</h5>";
-    h += item("all", "◧", "All", scoped.filter((t) => t.status !== "archived"));
+    h += `<h5>Status<span class="seg" role="group" aria-label="Status by">` +
+      `<button data-by="jira" class="${state.statusBy === "jira" ? "on" : ""}" title="Group and filter by Jira's status">Jira</button>` +
+      `<button data-by="local" class="${state.statusBy === "local" ? "on" : ""}" title="Group and filter by your own status">Mine</button></span></h5>`;
+    h += item("all", "◧", "All", scoped.filter((t) => statusOf(t) !== "archived"));
     h += item("open", "◨", "All open", scoped.filter(isOpen));
     const marks = { inbox: "○", inprogress: "◐", inreview: "◑", done: "●" };
-    for (const s of NAV_STATUSES) h += item(`status:${s}`, marks[s], STATUS_LABELS[s], scoped.filter((t) => t.status === s));
-    if (state.filter === "status:archived" || scoped.some((t) => t.status === "archived")) {
-      h += item("status:archived", "◌", "Archived", scoped.filter((t) => t.status === "archived"));
+    for (const s of NAV_STATUSES) h += item(`status:${s}`, marks[s], STATUS_LABELS[s], scoped.filter((t) => statusOf(t) === s));
+    if (state.filter === "status:archived" || scoped.some((t) => statusOf(t) === "archived")) {
+      h += item("status:archived", "◌", "Archived", scoped.filter((t) => statusOf(t) === "archived"));
     }
     h += `<h5>Notes</h5><div class="tree">${renderTree(o.notes, 0)}</div>`;
     h += `<div class="newnote" id="newnote"><button class="btn ghost" id="addnote">+ Note</button></div>`;
     $("nav").innerHTML = h;
 
+    $("nav").querySelectorAll("[data-route]").forEach((b) => b.addEventListener("click", () => go(b.dataset.route)));
+    $("nav").querySelectorAll("[data-smart]").forEach((b) => b.addEventListener("click", () => {
+      state.smart = b.dataset.smart;
+      state.group = "";
+      state.alignConfirm = false;
+      // A smart folder's filter already says what belongs in it.
+      state.filter = "all";
+      save(SMART_KEY, state.smart);
+      save(GROUP_KEY, "");
+      save(FILTER_KEY, state.filter);
+      renderNav();
+      renderList();
+    }));
+    $("nav").querySelectorAll("[data-by]").forEach((b) => b.addEventListener("click", () => {
+      state.statusBy = b.dataset.by;
+      save(STATUS_BY_KEY, state.statusBy);
+      renderNav();
+      renderList();
+    }));
     $("nav").querySelectorAll("[data-filter]").forEach((b) => {
       b.addEventListener("click", () => {
         state.filter = b.dataset.filter;
@@ -288,8 +340,11 @@
     $("nav").querySelectorAll(".grp[data-group]").forEach((row) => {
       const pick = () => {
         state.group = row.dataset.group;
+        state.smart = "";
         state.confirmGroup = null;
+        state.alignConfirm = false;
         save(GROUP_KEY, state.group);
+        save(SMART_KEY, "");
         renderNav();
         renderList();
       };
@@ -357,7 +412,9 @@
 
   /** True while a drag or an inline input is active: live refresh must not redraw under it. */
   function busy() {
-    return !!state.dragKey || !!document.querySelector("input.inl");
+    // An open Done/Bump form, or a new loop half typed, must not be redrawn away.
+    const typing = [...document.querySelectorAll(".lpf.add input")].some((i) => i.value.trim());
+    return !!state.dragKey || typing || !!document.querySelector("input.inl, .lpf[data-for]");
   }
 
   /** Runs the redraw that was postponed while busy(). */
@@ -407,7 +464,11 @@
     const flat = !!state.query.trim();
     const nodes = flat ? rows.map((row) => ({ row, depth: 0, kids: 0, folded: false })) : buildTree(rows);
     const treeMode = !flat && rows.some((t) => t.parent);
-    let h = `<div class="lh"><div class="t">${esc(filterTitle())}<span>${rows.length} ticket${rows.length === 1 ? "" : "s"}</span></div>` +
+    const off = rows.filter((t) => t.mismatch);
+    const alignBtn = !off.length ? "" : state.alignConfirm
+      ? `<span class="al">Align ${off.length} to Jira?<button class="btn" id="alignyes">Yes</button><button class="btn ghost" id="alignno">No</button></span>`
+      : `<button class="btn al" id="alignall" title="Copy Jira's status into yours for ${off.length} ticket${off.length === 1 ? "" : "s"} here (Jira is never written)">Align ${off.length}</button>`;
+    let h = `<div class="lh"><div class="t">${esc(filterTitle())}<span>${rows.length} ticket${rows.length === 1 ? "" : "s"}</span>${alignBtn}</div>` +
       `<div class="search">${ICON.mag}<input id="q" type="search" placeholder="Search key, title, person" value="${esc(state.query)}"><kbd>⌘K</kbd></div></div><div class="scroll" id="listscroll">`;
     if (!rows.length) h += `<div class="empty">Nothing here.</div>`;
     for (const { row: t, depth, kids, folded } of nodes) {
@@ -419,11 +480,25 @@
         (t.unread ? `<span class="dot" title="${t.unread} unread change${t.unread === 1 ? "" : "s"}"></span>` : "<span></span>") +
         `<div class="ti">${esc(t.title)}</div>` +
         (t.unread && t.change ? `<div class="chl" title="${esc(t.change)}">${esc(t.change)}</div>` : "") +
-        `<div class="r3">${jiraChip(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}` +
+        `<div class="r3">${statusPair(t)}${!t.mine && t.assignee ? `<span>${esc(t.assignee)}</span>` : ""}` +
         (t.waiting.length ? `<span class="wt" title="${esc(t.waiting.join("\n"))}">⏳ ${esc(t.waiting[0].split(":")[0])}${t.waiting.length > 1 ? ` +${t.waiting.length - 1}` : ""}</span>` : "") + `</div></div>`;
     }
     h += `<div class="unnest">Drop here to un-nest</div>`;
     $("list").innerHTML = h + "</div>";
+    const alignAll = $("alignall");
+    if (alignAll) alignAll.addEventListener("click", () => { state.alignConfirm = true; renderList(); });
+    const alignNo = $("alignno");
+    if (alignNo) alignNo.addEventListener("click", () => { state.alignConfirm = false; renderList(); });
+    const alignYes = $("alignyes");
+    if (alignYes) alignYes.addEventListener("click", async () => {
+      state.alignConfirm = false;
+      try {
+        const r = await api("POST", "/api/align", { keys: off.map((t) => t.key) });
+        toast(`Aligned ${r.changes.length} ticket${r.changes.length === 1 ? "" : "s"} to Jira`, true);
+        await loadOverview();
+        if (state.route.kind === "ticket") await reloadTicket();
+      } catch (err) { toast(err.message); renderList(); }
+    });
     const q = $("q");
     q.addEventListener("input", () => {
       state.query = q.value;
@@ -545,6 +620,7 @@
     let h = `<div class="fh">${ICON.folder}<b title="${esc(t.rel)}">${esc(t.rel.split("/").pop())}</b></div><div class="body">` +
       `<button class="pin${r.item === "task" ? " on" : ""}" data-item="task"><span class="pi">${ICON.task}</span><span class="pn">Original Task</span><span class="ps">${esc(t.row.key)} · ${t.row.source === "jira" ? "from Jira" : "local"}</span></button>` +
       `<button class="pin${r.item === "history" ? " on" : ""}" data-item="history"><span class="pi">${ICON.hist}</span><span class="pn">History</span><span class="ps" id="histcount">events</span>${unread ? `<span class="bd" title="${unread} unread">${unread}</span>` : ""}</button>` +
+      `<button class="pin${r.item === "loops" ? " on" : ""}" data-item="loops"><span class="pi">⟳</span><span class="pn">Loops</span><span class="ps">${t.loops.length ? `${t.loops.length} open` : "none open"} · log</span>${t.loops.some((l) => l.expired) ? `<span class="bd x" title="expired">!</span>` : ""}</button>` +
       (t.repo ? `<button class="pin" data-item="repo" title="${esc(t.repo.rel)}${t.repo.exists ? "" : " (will be created)"}"><span class="pi">${ICON.folder}</span><span class="pn">Repo notes</span><span class="ps">${esc(t.repo.name)}</span></button>` : "") + "<hr>";
     for (const f of t.files) {
       const isImg = /\.(png|jpe?g|gif|webp|svg)$/i.test(f);
@@ -556,6 +632,7 @@
     $("folder").innerHTML = h;
     $("folder").querySelector('[data-item="task"]').addEventListener("click", () => go(`#/t/${t.row.key}`));
     $("folder").querySelector('[data-item="history"]').addEventListener("click", () => go(`#/t/${t.row.key}/history`));
+    $("folder").querySelector('[data-item="loops"]').addEventListener("click", () => go(`#/t/${t.row.key}/loops`));
     const repo = $("folder").querySelector('[data-item="repo"]');
     if (repo) repo.addEventListener("click", async () => {
       try {
@@ -639,6 +716,169 @@
     folder.querySelectorAll("[data-lfile]").forEach((b) => b.addEventListener("click", () => go(`#/t/${t.row.key}/x/${encodeURIComponent(b.dataset.lfile)}`)));
   }
 
+  // ---------- loops ----------
+  // The same operations as `lf loop` / `lf done` / `lf bump`, writing the same loops.md and ## Log.
+  // Done always asks for the next loop: the user either fills it in or skips it explicitly.
+
+  const BY_HINT = "+4h, 18:00, eod, tomorrow, 2026-10-14";
+
+  function loopLine(l, opts) {
+    const ticket = !opts.ticket ? "" : l.key
+      ? `<a class="lk" href="#/t/${esc(l.key)}" title="${esc(l.title || "")}">${esc(l.key)}</a>${l.title ? `<span class="lt">${esc(l.title)}</span>` : ""}`
+      : `<span class="lt">no ticket</span>`;
+    const who = l.owner === "me" ? `<span class="who me">on me</span>` : `<span class="who">from ${esc(l.owner)}</span>`;
+    let h = `<div class="lp${l.expired ? " x" : ""}" data-loop="${esc(l.id)}"><div class="l1">` +
+      `<span class="id">${esc(l.id)}</span>${ticket}<span class="tx">${esc(l.text)}</span></div>` +
+      `<div class="l2">${who}<span class="due${l.expired ? " x" : ""}">${l.expired ? "was due" : "by"} ${esc(l.dueLabel)}</span>` +
+      (l.onExpiry ? `<span class="else">else: ${esc(l.onExpiry)}</span>` : "") +
+      `<span class="acts"><button class="btn" data-ldone="${esc(l.id)}">Done</button><button class="btn ghost" data-lbump="${esc(l.id)}">Bump</button></span></div>`;
+    const f = state.loopForm;
+    if (f && f.id === l.id && f.kind === "done") {
+      h += `<form class="lpf" data-for="${esc(l.id)}"><label>Outcome<input name="outcome" placeholder="Tom approved, 2 comments" autocomplete="off"></label>` +
+        `<div class="nx"><b>Next loop${l.key ? ` for ${esc(l.key)}` : ""}</b>` +
+        `<input name="text" placeholder="what next / what I am waiting for" autocomplete="off">` +
+        `<input name="by" placeholder="by: ${BY_HINT}" autocomplete="off"><input name="from" placeholder="from (empty = me)" autocomplete="off">` +
+        `<input name="else" placeholder="else: what then" autocomplete="off"></div>` +
+        `<div class="fb"><button class="btn" type="submit" name="act" value="next">Close + add next</button>` +
+        `<button class="btn" type="button" data-skip>Close, no next step</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    }
+    if (f && f.id === l.id && f.kind === "bump") {
+      h += `<form class="lpf" data-for="${esc(l.id)}"><div class="nx"><input name="by" placeholder="new deadline: ${BY_HINT}" autocomplete="off">` +
+        `<button class="btn" type="submit">Move</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    }
+    return h + `</div>`;
+  }
+
+  function addLoopForm(key) {
+    return `<form class="lpf add" data-add="${esc(key || "")}"><div class="nx"><input name="text" placeholder="New loop: what I am waiting for / my next step" autocomplete="off">` +
+      (key ? "" : `<input name="key" placeholder="ticket (optional)" autocomplete="off" class="k">`) +
+      `<input name="by" placeholder="by: ${BY_HINT}" autocomplete="off"><input name="from" placeholder="from (empty = me)" autocomplete="off">` +
+      `<input name="else" placeholder="else: what then" autocomplete="off"><button class="btn" type="submit">Add</button></div></form>`;
+  }
+
+  const formVal = (form, name) => (form.elements[name] ? form.elements[name].value.trim() : "");
+
+  /** After any loop change: the overview (nav counts, list) and whatever page shows loops. */
+  async function afterLoopChange() {
+    state.loopForm = null;
+    if (state.route.kind === "ticket") await reloadTicket();
+    else { await loadOverview(); await renderContent(); }
+  }
+
+  function wireLoops(root) {
+    const open = (id, kind) => {
+      state.loopForm = { id, kind };
+      const scroll = root.querySelector(".scroll");
+      const top = scroll ? scroll.scrollTop : 0;
+      renderContent().then(() => {
+        const again = $("content").querySelector(".scroll");
+        if (again) again.scrollTop = top;
+        const f = $("content").querySelector(`.lpf[data-for="${CSS.escape(id)}"] input`);
+        if (f) f.focus();
+      });
+    };
+    root.querySelectorAll("[data-ldone]").forEach((b) => b.addEventListener("click", () => open(b.dataset.ldone, "done")));
+    root.querySelectorAll("[data-lbump]").forEach((b) => b.addEventListener("click", () => open(b.dataset.lbump, "bump")));
+    root.querySelectorAll(".lpf [data-cancel]").forEach((b) => b.addEventListener("click", () => {
+      state.loopForm = null;
+      renderContent().then(flushPending);
+    }));
+    root.querySelectorAll(".lpf[data-for]").forEach((form) => {
+      const id = form.dataset.for;
+      const done = async (next) => {
+        try {
+          const r = await api("POST", "/api/loop/done", { id, outcome: formVal(form, "outcome"), next });
+          toast(`Closed ${r.closed.id}${r.next ? `, next: ${r.next.id}` : ""} → ${r.loggedTo}`, true, 4000);
+          await afterLoopChange();
+          flushPending();
+        } catch (err) { toast(err.message); }
+      };
+      const skip = form.querySelector("[data-skip]");
+      if (skip) skip.addEventListener("click", () => done(null));
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (state.loopForm && state.loopForm.kind === "bump") {
+          try {
+            const r = await api("POST", "/api/loop/bump", { id, by: formVal(form, "by") });
+            toast(`${r.loop.id} moved to ${r.loop.due}`, true);
+            await afterLoopChange();
+            flushPending();
+          } catch (err) { toast(err.message); }
+          return;
+        }
+        if (!formVal(form, "text") || !formVal(form, "by")) {
+          toast("The next loop needs a text and a deadline — or use “Close, no next step”.");
+          return;
+        }
+        await done({ text: formVal(form, "text"), by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else") });
+      });
+    });
+    root.querySelectorAll(".lpf[data-add]").forEach((form) => form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const key = form.dataset.add || formVal(form, "key").toUpperCase();
+        const l = await api("POST", "/api/loop", { text: formVal(form, "text"), key, by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else") });
+        toast(`Loop ${l.id}: ${l.owner === "me" ? "on me" : `waiting for ${l.owner}`} by ${l.due}`, true);
+        await afterLoopChange();
+      } catch (err) { toast(err.message); }
+    }));
+  }
+
+  /** A ticket's open loops and the tail of its ## Log. `compact` is the block on top of the Jira mirror. */
+  function ticketLoops(t, compact) {
+    if (compact && !t.loops.length && !t.row.tracked) return "";
+    let h = `<div class="tloops${compact ? " compact" : ""}"><div class="lh2"><b>Loops</b><span>${t.loops.length} open</span>` +
+      (compact ? `<a href="#/t/${esc(t.row.key)}/loops">log & new loop →</a>` : "") + `</div>`;
+    if (!t.loops.length) h += `<div class="none">${t.row.tracked ? "Tracked, but no open loop: add the next step, or untrack it (lf untrack)." : "No open loops."}</div>`;
+    for (const l of t.loops) h += loopLine(l, { ticket: false });
+    if (!compact) {
+      h += addLoopForm(t.row.key);
+      h += `<div class="lh2"><b>Log</b><span>last ${t.log.length}, notes.md</span></div>`;
+      if (!t.log.length) h += `<div class="none">Nothing logged yet.</div>`;
+      for (const e of [...t.log].reverse()) h += `<div class="lg"><time>${esc(e.date.slice(5))}${e.time ? ` ${esc(e.time)}` : ""}</time><span>${esc(e.text)}</span></div>`;
+    }
+    return h + `</div>`;
+  }
+
+  function renderTicketLoops(t) {
+    $("content").innerHTML = ticketHeader(t) + `<div class="scroll">${ticketLoops(t, false)}</div>`;
+    wireHeader(t);
+    wireLoops($("content"));
+  }
+
+  async function renderLoopBoard() {
+    let b;
+    try { b = await api("GET", "/api/loops"); } catch (err) { toast(err.message); return; }
+    if (state.route.kind !== "loops") return;
+    const section = (title, cls, items, empty) =>
+      `<div class="ls ${cls}"><h3>${title}<span>${items.length}</span></h3>` +
+      (items.length ? items.map((l) => loopLine(l, { ticket: true })).join("") : `<div class="none">${empty}</div>`) + `</div>`;
+    let h = `<div class="scroll"><div class="board"><div class="hh"><h2>Loops</h2><span>loops.md · expired first</span></div>` + addLoopForm("");
+    h += section("🐸 Expired", "x", b.expired, "Nothing expired — no frog today.");
+    h += section("⏰ Due today", "td", b.today, "Nothing else due today.");
+    h += section("⚪ On me", "me", b.mine, "No later steps of mine.");
+    h += section("🟡 Waiting on people", "wt", b.waiting, "Nobody owes me anything later.");
+    $("content").innerHTML = h + `</div></div>`;
+    wireLoops($("content"));
+  }
+
+  async function renderStandup() {
+    let r;
+    try { r = await api("GET", `/api/standup${state.standupWeek ? "?week=1" : ""}`); } catch (err) { toast(err.message); return; }
+    if (state.route.kind !== "standup") return;
+    $("content").innerHTML = `<div class="scroll"><div class="board"><div class="hh"><h2>Standup</h2>` +
+      `<span class="seg"><button data-week="0" class="${state.standupWeek ? "" : "on"}">Today</button><button data-week="1" class="${state.standupWeek ? "on" : ""}">Week</button></span>` +
+      `<button class="btn" id="copystandup">Copy</button></div><pre class="standup">${esc(r.text)}</pre>` +
+      `<div class="src">Same text as <code>lf standup${state.standupWeek ? " --week" : ""}</code>: from ## Log lines and open loops.</div></div></div>`;
+    $("content").querySelectorAll("[data-week]").forEach((b) => b.addEventListener("click", () => {
+      state.standupWeek = b.dataset.week === "1";
+      renderContent();
+    }));
+    $("copystandup").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(r.text); toast("Copied", true); } catch { toast("Copy failed: select the text and copy it by hand."); }
+    });
+  }
+
   // ---------- pane 4: ticket mirror ----------
 
   function fmtWhen(iso) {
@@ -703,8 +943,8 @@
     return `<div class="th"><div class="k"><span class="key">${esc(r.key)}</span>${r.type ? `<span class="chip type">${esc(r.type)}</span>` : ""}` +
       `<span class="ro">${r.source === "jira" ? "ticket.md, read-only" : "local ticket"}</span></div>` +
       `<h1>${esc(r.title)}</h1><div class="meta">` +
-      `<span class="f">Status <select class="sel" id="mystatus" aria-label="Your status">${statusOpts}</select></span>` +
-      `<span class="f">${jiraChip(r)}${r.ahead ? `<span class="jira-hint">Jira is ahead of you</span>` : ""}</span>` +
+      `<span class="f">Mine <select class="sel" id="mystatus" aria-label="Your status">${statusOpts}</select></span>` +
+      `<span class="f">${jiraChip(r)}${r.mismatch ? `<span class="mm" title="Your status and Jira's disagree">≠</span><button class="btn" id="alignone" title="Set your status to ${esc(STATUS_LABELS[r.jiraLocal] || r.jiraLocal)} (Jira is never written)">Align → ${esc(STATUS_LABELS[r.jiraLocal] || r.jiraLocal)}</button>` : ""}</span>` +
       (r.priority ? `<span class="f">${prioChip(r.priority)}</span>` : "") +
       (r.assignee ? `<span class="f">${esc(r.mine ? "You" : r.assignee)}</span>` : "") +
       (r.source === "jira" && state.overview.canSync ? `<button class="btn sync${state.syncKey === r.key ? " busy" : ""}" id="syncbtn" title="Fetch this ticket from Jira now (read-only)"${state.syncKey ? " disabled" : ""}>${syncLabel(state.syncKey === r.key)}</button>` : "") +
@@ -722,6 +962,13 @@
     });
     const syncBtn = $("syncbtn");
     if (syncBtn) syncBtn.addEventListener("click", () => syncNow(t.row.key));
+    const alignOne = $("alignone");
+    if (alignOne) alignOne.addEventListener("click", async () => {
+      try {
+        await api("POST", "/api/align", { keys: [t.row.key] });
+        await reloadTicket();
+      } catch (err) { toast(err.message); }
+    });
     const seen = $("seen");
     if (seen) seen.addEventListener("click", async () => {
       try {
@@ -739,13 +986,14 @@
   }
 
   function renderMirror(t) {
-    let h = sinceStrip(t) + ticketHeader(t) + `<div class="scroll"><div class="mirror">`;
+    let h = sinceStrip(t) + ticketHeader(t) + `<div class="scroll">${ticketLoops(t, true)}<div class="mirror">`;
     for (const b of t.blocks) {
       h += `<div class="blk ${b.state}"><div class="md">${b.html}</div>` +
         (b.was ? `<div class="was">was: <div class="md">${b.was}</div></div>` : "") + `</div>`;
     }
     $("content").innerHTML = h + `</div></div>`;
     wireHeader(t);
+    wireLoops($("content"));
   }
 
   async function renderHistory(t) {
@@ -1167,6 +1415,7 @@
     if (r.kind === "ticket") {
       const t = state.ticket;
       if (r.item === "history") return renderHistory(t);
+      if (r.item === "loops") return renderTicketLoops(t);
       if (r.item === "file") {
         return openFile(`${t.rel}/${r.file}`, `<span class="key">${esc(t.row.key)}</span> / <b>${esc(r.file)}</b>`);
       }
@@ -1183,6 +1432,8 @@
       const parts = r.rel.split("/");
       return openFile(r.rel, `${esc(parts.slice(0, -1).join(" / "))} / <b>${esc(parts[parts.length - 1])}</b>`);
     }
+    if (r.kind === "loops") return renderLoopBoard();
+    if (r.kind === "standup") return renderStandup();
     $("content").innerHTML = `<div class="empty">Pick a ticket on the left, or a note below the groups.</div>`;
   }
 
@@ -1271,6 +1522,8 @@
       if (ed) { if (!ed.editing && !ed.dirty && await ed.changedOnDisk()) await redraw(); }
       else if (changed) await redraw();
     } else if (r.kind === "note" && ed && !ed.editing && !ed.dirty && await ed.changedOnDisk()) {
+      await redraw();
+    } else if (r.kind === "loops" || r.kind === "standup") {
       await redraw();
     }
   }
