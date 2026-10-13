@@ -10,7 +10,7 @@ import { diffBlocks } from "../render/blockdiff.ts";
 import type { DiffBlock } from "../render/blockdiff.ts";
 import { jiraAhead, priorityOf, refreshInbox, waitingLine } from "../render/inbox.ts";
 import { renderBlock, splitBlocks } from "../render/markdown.ts";
-import { UserError, readTextIfExists, slugify, today, writeFileAtomic } from "../util.ts";
+import { ConflictError, UserError, contentHash, readTextIfExists, slugify, today, writeFileAtomic, writeIfUnchanged } from "../util.ts";
 import { dumpFrontmatter, parseFrontmatter, removeFrontmatterKeys, setFrontmatterKeys } from "../vault/frontmatter.ts";
 import type { Frontmatter } from "../vault/frontmatter.ts";
 import { git, head, log } from "../vault/git.ts";
@@ -24,8 +24,8 @@ import type { Ticket } from "../vault/store.ts";
 import { LINKED_KEY, readLinkedFile, readLinkedFolders } from "../vault/links.ts";
 import type { LinkedFolder } from "../vault/links.ts";
 import { beginWork, repoOf } from "../vault/scaffold.ts";
-import { ME, addLoop, bumpLoop, closeLoop, dueAt, parseWhen, readLoops, syncLoops } from "../vault/loops.ts";
-import type { Loop } from "../vault/loops.ts";
+import { LOOPS_FILE, ME, addLoop, bumpLoop, cleanTag, closeLoop, dueAt, loopsHash, parseWhen, readLoops, replaceLoopLine, syncLoops, ticketBranches } from "../vault/loops.ts";
+import type { ClosedStep, Loop } from "../vault/loops.ts";
 import { isTracked, readLog } from "../vault/notes.ts";
 import type { LogLine } from "../vault/notes.ts";
 import { loopsByKey, smartFolders } from "../vault/smart.ts";
@@ -57,6 +57,8 @@ export function safeRel(rel: string): string {
 function isUserEditable(vault: string, rel: string): boolean {
   const parts = rel.split("/");
   if (!rel.endsWith(".md")) return false;
+  // loops.md belongs to the user too; saves are compare-and-swap like every editor save.
+  if (rel === LOOPS_FILE) return true;
   if (parts[0] === NOTES_DIR) return parts.length >= 2;
   if (parts[0] === PROJECTS_DIR && parts.length === 4) {
     const name = parts[3];
@@ -400,6 +402,8 @@ export interface TicketView {
   loops: LoopView[];
   /** The last lines of `## Log` in notes.md, oldest first. */
   log: LogLine[];
+  /** The ticket's steps by branch tag: closed ones (from the Log) with their outcome, then the open ones. */
+  branches: Array<{ tag: string; closed: ClosedStep[]; open: LoopView[] }>;
 }
 
 function ticketUrlResolver(rel: string): (url: string) => string {
@@ -449,6 +453,7 @@ export function ticketView(vault: string, rawKey: string): TicketView {
   const now = new Date();
   const loops = loopsByKey(readLoops(vault)).get(t.key) ?? [];
   const b = bucket(loops, now);
+  const logLines = readLog(readTextIfExists(path.join(t.dir, NOTES_FILE)) ?? "");
   return {
     row: row(t, config, unread.length, changes, loops),
     rel: t.rel,
@@ -462,7 +467,8 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     changes,
     seenDate: seenCommit?.date ?? null,
     loops: [...b.expired, ...b.today, ...b.mine, ...b.waiting].map((l) => loopView(l, now)),
-    log: readLog(readTextIfExists(path.join(t.dir, NOTES_FILE)) ?? "").slice(-LOG_TAIL),
+    log: logLines.slice(-LOG_TAIL),
+    branches: ticketBranches(logLines, loops).map((br) => ({ ...br, open: br.open.map((l) => loopView(l, now)) })),
   };
 }
 
@@ -498,6 +504,8 @@ export interface FileView {
   blocks: Array<{ src: string; html: string }>;
   /** Raw frontmatter text (kept verbatim on save). */
   head: string;
+  /** Hash of the file as loaded: a save sends it back and is refused if the file changed since. */
+  hash: string;
 }
 
 const FM_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -515,6 +523,7 @@ export function fileView(vault: string, rawRel: string): FileView {
     fm: parseFrontmatter(text).data,
     blocks: splitBlocks(body).map((src) => ({ src, html: renderBlock(src, { resolveUrl }) })),
     head: m ? m[0] : "",
+    hash: contentHash(text),
   };
 }
 
@@ -530,6 +539,7 @@ export function linkedFileView(vault: string, rawKey: string, file: string): Fil
     // Relative links point outside the vault, which /raw does not serve: leave them as written.
     blocks: splitBlocks(body).map((src) => ({ src, html: renderBlock(src) })),
     head: m ? m[0] : "",
+    hash: contentHash(text),
   };
 }
 
@@ -539,18 +549,26 @@ export function renderOne(src: string, rel: string): string {
   return renderBlock(src, { resolveUrl });
 }
 
-export function saveFile(vault: string, rawRel: string, body: string, headText: string): void {
+/**
+ * Saves a file from the editor. With `baseHash` (the web UI always sends it) the save goes through
+ * only if the file is still the version the editor loaded; otherwise ConflictError, nothing written.
+ * Returns the new hash.
+ */
+export function saveFile(vault: string, rawRel: string, body: string, headText: string, baseHash?: string): string {
   const rel = safeRel(rawRel);
   if (!isUserEditable(vault, rel)) throw new UserError(`${rel} is not editable here.`);
   const normalized = body.replace(/\r\n?/g, "\n").replace(/\s+$/, "") + "\n";
   // A first edit of a ticket's notes.md puts it in "Tracking"; an explicit untrack is respected.
   const isNotes = rel.startsWith(`${PROJECTS_DIR}/`) && rel.endsWith(`/${NOTES_FILE}`);
   const head = isNotes && parseFrontmatter(headText).data.tracked === undefined && FM_RE.test(headText) ? setFrontmatterKeys(headText, { tracked: true }) : headText;
-  writeFileAtomic(path.join(vault, rel), head + normalized);
+  const data = head + normalized;
+  if (baseHash === undefined) writeFileAtomic(path.join(vault, rel), data);
+  else writeIfUnchanged(path.join(vault, rel), baseHash, data, rel);
   if (isNotes) refreshInbox(vault);
+  return contentHash(data);
 }
 
-export function setFrontmatter(vault: string, rawRel: string, updates: Record<string, string>): void {
+export function setFrontmatter(vault: string, rawRel: string, updates: Record<string, string>, baseHash?: string): string {
   const rel = safeRel(rawRel);
   if (!isUserEditable(vault, rel)) throw new UserError(`${rel} is not editable here.`);
   const file = path.join(vault, rel);
@@ -564,8 +582,13 @@ export function setFrontmatter(vault: string, rawRel: string, updates: Record<st
   if (updates.status !== undefined && !(LOCAL_STATUSES as readonly string[]).includes(updates.status)) {
     throw new UserError(`Unknown status "${updates.status}".`);
   }
-  writeFileAtomic(file, setFrontmatterKeys(text, updates));
+  if (baseHash !== undefined && contentHash(text) !== baseHash) {
+    throw new ConflictError(`${rel} changed on disk since it was loaded: nothing was saved. Reload to see the current version.`);
+  }
+  const data = setFrontmatterKeys(text, updates);
+  writeFileAtomic(file, data);
   if (rel.endsWith(`/${NOTES_FILE}`)) refreshInbox(vault);
+  return contentHash(data);
 }
 
 function cleanName(raw: string): string {
@@ -644,6 +667,8 @@ export interface LoopBoard {
   today: LoopView[];
   mine: LoopView[];
   waiting: LoopView[];
+  /** loops.md as read, for the text view. */
+  hash: string;
 }
 
 /** The ACTIONS.md board as data. Numbers hand-written lines in loops.md and rewrites ACTIONS.md. */
@@ -653,7 +678,7 @@ export function loopBoard(vault: string): LoopBoard {
   const titles = new Map(listTickets(vault).map((t) => [t.key, t.title]));
   const b = bucket(loops, now);
   const v = (ls: Loop[]): LoopView[] => ls.map((l) => loopView(l, now, titles));
-  return { expired: v(b.expired), today: v(b.today), mine: v(b.mine), waiting: v(b.waiting) };
+  return { expired: v(b.expired), today: v(b.today), mine: v(b.mine), waiting: v(b.waiting), hash: loopsHash(vault) };
 }
 
 const workdayEnd = (vault: string): string | undefined => loadConfig(vault).loops?.workdayEnd;
@@ -664,6 +689,7 @@ export interface LoopInput {
   from?: string;
   by: string;
   else?: string;
+  tag?: string;
 }
 
 function optStr(body: Record<string, unknown>, name: string): string | undefined {
@@ -679,12 +705,12 @@ export function loopInput(body: Record<string, unknown>): LoopInput {
   const by = optStr(body, "by")?.trim();
   if (!text) throw new UserError("What is the loop about? (text)");
   if (!by) throw new UserError("Every loop needs a deadline: +4h, 18:00, eod, tomorrow, 2026-10-14.");
-  return { text, by, key: optStr(body, "key"), from: optStr(body, "from"), else: optStr(body, "else") };
+  return { text, by, key: optStr(body, "key"), from: optStr(body, "from"), else: optStr(body, "else"), tag: optStr(body, "tag") };
 }
 
 export function createLoop(vault: string, input: LoopInput): Loop {
   const now = new Date();
-  const loop = addLoop(vault, { text: input.text, key: input.key, owner: input.from, by: input.by, onExpiry: input.else }, now, workdayEnd(vault));
+  const loop = addLoop(vault, { text: input.text, key: input.key, owner: input.from, by: input.by, onExpiry: input.else, tag: input.tag }, now, workdayEnd(vault));
   refreshActions(vault, now);
   return loop;
 }
@@ -694,23 +720,39 @@ export function createLoop(vault: string, input: LoopInput): Loop {
  * chose to skip it explicitly. The next loop is checked before anything is written, so a bad
  * deadline does not leave the first loop closed with no follow-up.
  */
-export function finishLoop(vault: string, id: string, outcome: string, next: LoopInput | null): { closed: Loop; loggedTo: string; next: Loop | null } {
+export function finishLoop(
+  vault: string, id: string, outcome: string, next: LoopInput | null, expect?: string,
+): { closed: Loop; loggedTo: string; next: Loop | null } {
   const now = new Date();
-  // Throws with the accepted forms when the deadline is unreadable.
-  if (next) parseWhen(next.by, now, workdayEnd(vault));
-  const { loop, loggedTo } = closeLoop(vault, id, outcome, now);
+  // Throws with the accepted forms when the deadline or the tag is unreadable.
+  if (next) {
+    parseWhen(next.by, now, workdayEnd(vault));
+    cleanTag(next.tag);
+  }
+  const { loop, loggedTo } = closeLoop(vault, id, outcome, now, { expect });
+  // Same ticket and branch, pointing back at the closed step.
   const opened = next
-    ? addLoop(vault, { text: next.text, key: next.key ?? loop.key ?? undefined, owner: next.from, by: next.by, onExpiry: next.else }, now, workdayEnd(vault))
+    ? addLoop(vault, {
+      text: next.text, key: next.key ?? loop.key ?? undefined, owner: next.from, by: next.by, onExpiry: next.else, tag: next.tag ?? loop.tag, after: loop.id,
+    }, now, workdayEnd(vault))
     : null;
   refreshActions(vault, now);
   return { closed: loop, loggedTo, next: opened };
 }
 
-export function moveLoop(vault: string, id: string, by: string): { loop: Loop; was: string } {
+export function moveLoop(vault: string, id: string, by: string, onExpiry?: string, expect?: string): { loop: Loop; was: string; wasElse: string } {
   const now = new Date();
-  const r = bumpLoop(vault, id, by, now, workdayEnd(vault));
+  const r = bumpLoop(vault, id, by, now, workdayEnd(vault), { onExpiry, expect });
   refreshActions(vault, now);
   return r;
+}
+
+/** The text view: one loop's line replaced, through the same parser and checks as lf. */
+export function editLoopLine(vault: string, id: string, line: string, expect: string): LoopView {
+  const l = replaceLoopLine(vault, id, line, expect);
+  const now = new Date();
+  refreshActions(vault, now);
+  return loopView(l, now);
 }
 
 /** Exactly what `lf standup [--week]` prints. */

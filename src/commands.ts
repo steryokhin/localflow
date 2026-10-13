@@ -23,9 +23,9 @@ import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, s
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
 import { linkFolder, unlinkFolder } from "./vault/links.ts";
-import { ME, addLoop, bumpLoop, closeLoop, parseWhen, readLoops, syncLoops } from "./vault/loops.ts";
+import { ME, addLoop, bumpLoop, cleanTag, closeLoop, dueAt, parseWhen, readLoops, syncLoops, ticketBranches } from "./vault/loops.ts";
 import type { Loop } from "./vault/loops.ts";
-import { appendTicketLog, setTracked } from "./vault/notes.ts";
+import { appendTicketLog, notesText, readLog, setTracked } from "./vault/notes.ts";
 import { beginWork, repoOf, setRepo } from "./vault/scaffold.ts";
 import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
@@ -443,13 +443,16 @@ const workdayEnd = (vault: string): string | undefined => loadConfig(vault).loop
 
 function describeLoop(l: Loop, now: Date): string {
   const whom = l.owner === ME ? "on me" : `waiting for ${l.owner}`;
-  return `${l.id} · ${l.key ?? "no ticket"} · ${l.text} · ${whom} · by ${fmtDue(l.due, now)}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
+  const branch = `${l.tag ? ` #${l.tag}` : ""}${l.after ? ` (after ${l.after})` : ""}`;
+  return `${l.id}${branch} · ${l.key ?? "no ticket"} · ${l.text} · ${whom} · by ${fmtDue(l.due, now)}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
 }
 
-export function cmdLoop(vault: string, text: string, opts: { key?: string; from?: string; by?: string; else?: string }): void {
+export function cmdLoop(
+  vault: string, text: string, opts: { key?: string; from?: string; by?: string; else?: string; tag?: string | null; after?: string | null },
+): void {
   if (!opts.by) throw new UserError('Every loop needs a deadline: --by +4h | 18:00 | eod | tomorrow | 2026-10-14 ["12:00"]');
   const now = new Date();
-  const loop = addLoop(vault, { text, key: opts.key, owner: opts.from, by: opts.by, onExpiry: opts.else }, now, workdayEnd(vault));
+  const loop = addLoop(vault, { text, key: opts.key, owner: opts.from, by: opts.by, onExpiry: opts.else, tag: opts.tag, after: opts.after }, now, workdayEnd(vault));
   refreshActions(vault, now);
   out(`loop ${describeLoop(loop, now)}`);
 }
@@ -469,6 +472,8 @@ export interface NextLoop {
   by?: string;
   from?: string;
   else?: string;
+  /** Overrides the branch tag inherited from the closed loop. */
+  tag?: string;
 }
 
 export async function cmdDone(vault: string, query: string, outcome: string, next?: NextLoop): Promise<void> {
@@ -477,12 +482,14 @@ export async function cmdDone(vault: string, query: string, outcome: string, nex
   if (next) {
     if (!next.text.trim() || !next.by) throw new UserError('--next needs a text and --by WHEN: lf done L3 "outcome" --next "TEXT" --by +4h');
     parseWhen(next.by, now, workdayEnd(vault));
+    cleanTag(next.tag);
   }
   const { loop, loggedTo } = closeLoop(vault, query, outcome, now);
   refreshActions(vault, now);
   out(`closed ${loop.id}: ${loop.text} → ${loggedTo}`);
+  // The next step stays on the same branch and points back at the one it follows.
   if (next) {
-    cmdLoop(vault, next.text, { key: loop.key ?? undefined, from: next.from, by: next.by, else: next.else });
+    cmdLoop(vault, next.text, { key: loop.key ?? undefined, from: next.from, by: next.by, else: next.else, tag: next.tag ?? loop.tag, after: loop.id });
     return;
   }
   // Closing a loop usually opens the next one; asked only when a person is at the terminal.
@@ -494,15 +501,16 @@ export async function cmdDone(vault: string, query: string, outcome: string, nex
   if (!text) return;
   const by = await ask("By when? (+4h, 18:00, eod, tomorrow, 2026-10-14) ");
   const from = await ask("Waiting for whom? (empty = me) ");
-  cmdLoop(vault, text, { key: loop.key ?? undefined, from: from || undefined, by: by || "eod" });
+  cmdLoop(vault, text, { key: loop.key ?? undefined, from: from || undefined, by: by || "eod", tag: loop.tag, after: loop.id });
 }
 
-export function cmdBump(vault: string, query: string, by: string | undefined): void {
-  if (!by) throw new UserError("Usage: lf bump <id|word> --by WHEN");
+export function cmdBump(vault: string, query: string, by: string | undefined, onExpiry?: string): void {
+  if (!by) throw new UserError('Usage: lf bump <id|word> --by WHEN [--else "what then"]');
   const now = new Date();
-  const { loop, was } = bumpLoop(vault, query, by, now, workdayEnd(vault));
+  const { loop, was, wasElse } = bumpLoop(vault, query, by, now, workdayEnd(vault), { onExpiry });
   refreshActions(vault, now);
-  out(`${loop.id}: by ${fmtDue(loop.due, now)}${was ? ` (was ${was})` : ""} · ${loop.text}`);
+  const elseNote = onExpiry !== undefined ? ` · else: ${loop.onExpiry || "—"}${wasElse !== loop.onExpiry ? ` (was: ${wasElse || "—"})` : ""}` : "";
+  out(`${loop.id}: by ${fmtDue(loop.due, now)}${was ? ` (was ${was})` : ""}${elseNote} · ${loop.text}`);
 }
 
 export function cmdLog(vault: string, rawKey: string, text: string): void {
@@ -514,9 +522,30 @@ export function cmdLog(vault: string, rawKey: string, text: string): void {
   out(`${t.key}: logged`);
 }
 
-export function cmdLoops(vault: string): void {
-  refreshActions(vault, new Date());
-  process.stdout.write(terminalSafe(fs.readFileSync(path.join(vault, ACTIONS_FILE), "utf8")));
+export function cmdLoops(vault: string, opts: { key?: string; tag?: string } = {}): void {
+  const now = new Date();
+  const loops = refreshActions(vault, now);
+  if (!opts.key) {
+    if (opts.tag) throw new UserError("--tag goes with --key: lf loops --key KEY --tag BRANCH");
+    process.stdout.write(terminalSafe(fs.readFileSync(path.join(vault, ACTIONS_FILE), "utf8")));
+    return;
+  }
+  // One ticket's ladder of steps, by branch: closed steps from its ## Log, then the open ones.
+  const t = requireTicket(vault, opts.key);
+  const tag = cleanTag(opts.tag);
+  const branches = ticketBranches(readLog(notesText(t)), loops.filter((l) => l.key === t.key)).filter((b) => !tag || b.tag === tag);
+  out(`${t.key} ${t.title}`);
+  if (!branches.length) out(tag ? `  no steps on #${tag}` : "  no loops yet");
+  for (const b of branches) {
+    out("");
+    out(b.tag ? `#${b.tag}` : "(no branch)");
+    for (const c of b.closed) out(`  ✓ ${c.id}${c.after ? ` after ${c.after}` : ""} · ${c.text} → ${c.outcome} (${c.date})`);
+    for (const l of b.open) {
+      const at = dueAt(l.due);
+      const late = at && at <= now ? " — EXPIRED" : "";
+      out(`  ○ ${l.id}${l.after ? ` after ${l.after}` : ""} · ${l.text} · ${l.owner === ME ? "on me" : `from ${l.owner}`} · by ${fmtDue(l.due, now)}${late}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`);
+    }
+  }
 }
 
 export function cmdWatch(vault: string, opts: { plist?: boolean; quiet?: boolean }): void {

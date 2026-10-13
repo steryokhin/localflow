@@ -5,10 +5,10 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { UserError } from "../util.ts";
+import { ConflictError, UserError } from "../util.ts";
 import { assertLocalOnly } from "../vault/git.ts";
 import {
-  alignStatus, createGroup, createLoop, createNote, createTicketFile, deleteGroup, fileView, finishLoop, linkedFileView, loopBoard, loopInput,
+  alignStatus, createGroup, createLoop, editLoopLine, createNote, createTicketFile, deleteGroup, fileView, finishLoop, linkedFileView, loopBoard, loopInput,
   markSeen, moveLoop, overview, rawFilePath, renderOne, saveFile, setFrontmatter, setStatus, setTicketGroup, setTicketParent, standupText,
   syncTicket, ticketHistory, ticketView,
 } from "./api.ts";
@@ -182,7 +182,7 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
       if (/^\/app\.(css|js)$/.test(url.pathname)) return serveUi(res, path.join(UI_DIR, url.pathname.slice(1)));
       throw new HttpError(404, "Not found");
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : e instanceof UserError ? 400 : 500;
+      const status = e instanceof HttpError ? e.status : e instanceof ConflictError ? 409 : e instanceof UserError ? 400 : 500;
       const message = e instanceof Error ? e.message : String(e);
       if (status === 500) say(`error: ${message}`);
       json(res, status, { error: message });
@@ -245,6 +245,13 @@ function strOrNull(body: Record<string, unknown>, key: string): string | null {
   throw new HttpError(400, `"${key}" must be a string or null`);
 }
 
+function optional(body: Record<string, unknown>, key: string): string | undefined {
+  const v = body[key];
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === "string") return v;
+  throw new HttpError(400, `"${key}" must be a string`);
+}
+
 function obj(body: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = body[key];
   if (!v || typeof v !== "object" || Array.isArray(v)) throw new HttpError(400, `"${key}" must be an object`);
@@ -266,17 +273,16 @@ async function api(
     return linkedFileView(vault, url.searchParams.get("key") ?? "", url.searchParams.get("path") ?? "");
   }
   if (route === "POST /api/render") return { html: renderOne(str(body, "src"), str(body, "path")) };
+  // Whole-file writes are compare-and-swap: the client sends the hash of the version it loaded.
   if (route === "PUT /api/file") {
-    saveFile(vault, str(body, "path"), str(body, "body"), str(body, "head", false));
-    return { ok: true };
+    return { ok: true, hash: saveFile(vault, str(body, "path"), str(body, "body"), str(body, "head", false), str(body, "hash")) };
   }
   if (route === "POST /api/frontmatter") {
     const updates = body.updates;
     if (!updates || typeof updates !== "object") throw new HttpError(400, 'Missing "updates"');
     const clean: Record<string, string> = {};
     for (const [k, v] of Object.entries(updates as Record<string, unknown>)) if (typeof v === "string" && /^[A-Za-z_][\w-]*$/.test(k) && !["__proto__", "constructor", "prototype"].includes(k)) clean[k] = v;
-    setFrontmatter(vault, str(body, "path"), clean);
-    return { ok: true };
+    return { ok: true, hash: setFrontmatter(vault, str(body, "path"), clean, str(body, "hash")) };
   }
   if (route === "POST /api/seen") {
     markSeen(vault, str(body, "key"));
@@ -319,9 +325,10 @@ async function api(
     // "next": a loop, or null when the user explicitly skipped it. Leaving it out is an error.
     if (!("next" in body)) throw new HttpError(400, 'Missing "next": the next loop, or null to skip it');
     const next = body.next === null ? null : loopInput(obj(body, "next"));
-    return finishLoop(vault, str(body, "id"), str(body, "outcome", false), next);
+    return finishLoop(vault, str(body, "id"), str(body, "outcome", false), next, optional(body, "expect"));
   }
-  if (route === "POST /api/loop/bump") return moveLoop(vault, str(body, "id"), str(body, "by"));
+  if (route === "POST /api/loop/bump") return moveLoop(vault, str(body, "id"), str(body, "by"), optional(body, "else"), optional(body, "expect"));
+  if (route === "PUT /api/loop/line") return editLoopLine(vault, str(body, "id"), str(body, "line"), str(body, "expect"));
   if (route === "GET /api/standup") return { text: standupText(vault, url.searchParams.get("week") === "1") };
   throw new HttpError(404, `No such API: ${route}`);
 }

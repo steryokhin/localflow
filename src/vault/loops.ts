@@ -1,14 +1,20 @@
 // Open loops: something I did or asked for, who I am waiting on, until when, and what to do if
 // the deadline passes. They live in <vault>/loops.md, a user-owned plain file, one line per loop:
 //
-//   - [ ] L3 · 2026-10-12 11:05 · EXP-123 · PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews
+//   - [ ] L3 · 2026-10-12 11:05 · EXP-123 · #android · QA check · from Tom · by 2026-10-12 18:00 · after L2 · else: ping
 //
 // Fields are separated by " · " and recognised by their shape, so a hand-written line may leave
-// some out or use the Russian markers (от / до / иначе:). Closing a loop removes the line and
-// writes it to the ticket's "## Log" (or to loops-archive.md for a loop without a ticket).
+// some out or use the Russian markers (от / до / после / иначе:). "#tag" names a branch of the
+// ticket's work (several can run in parallel); "after L2" links a step to the one it follows.
+// Closing a loop removes the line and writes it to the ticket's "## Log" with its id, tag and
+// "after" (or to loops-archive.md for a loop without a ticket).
+//
+// The user edits loops.md by hand or in the web UI while lf changes it, so every change is a
+// compare-and-swap: read, change, write only if the file is still what was read; otherwise read
+// again and re-apply by id. A loop whose line changed in between is refused, never overwritten.
 
 import path from "node:path";
-import { UserError, readTextIfExists, writeFileAtomic } from "../util.ts";
+import { ConflictError, UserError, contentHash, readTextIfExists, writeFileAtomic } from "../util.ts";
 import { appendTicketLog, isTracked, oneLine, setTracked } from "./notes.ts";
 import { loadState, saveState } from "./state.ts";
 import { KEY_ONLY_RE, requireTicket } from "./store.ts";
@@ -30,11 +36,19 @@ export interface Loop {
   due: string;
   /** What to do when the deadline passes. */
   onExpiry: string;
+  /** Branch of the ticket's work ("android" for "#android"), or null. */
+  tag: string | null;
+  /** The step this one follows ("L3"), or null. */
+  after: string | null;
+  /** The line as it is in loops.md (set when read from the file). */
+  raw?: string;
 }
 
 interface Doc {
   lines: string[];
   loops: Array<Loop & { line: number }>;
+  /** Hash of the file as read: the write goes through only if it is unchanged. */
+  hash: string;
 }
 
 const HEADER = `# Open loops
@@ -89,8 +103,25 @@ export function parseWhen(input: string, now: Date, workdayEnd = "18:00"): strin
 
 // ---------- the file ----------
 
+const TAG_RE = /^#([\p{L}\p{N}_-]+)$/u;
+const LEADING_TAG_RE = /^#([\p{L}\p{N}_-]+)\s+(?=\S)/u;
+
+/** "#android" or "android" -> "android"; refuses anything that would not survive a round trip. */
+export function cleanTag(raw: string | undefined | null): string | null {
+  const t = (raw ?? "").trim().replace(/^#/, "");
+  if (!t) return null;
+  if (!TAG_RE.test(`#${t}`)) throw new UserError(`Not a branch tag: "${raw}". Use letters, digits, - or _ (e.g. android, a11y, web-scope).`);
+  return t;
+}
+
+/** "#android QA check" -> tag "android", text "QA check". */
+function splitLeadingTag(text: string): { tag: string | null; text: string } {
+  const m = LEADING_TAG_RE.exec(text);
+  return m ? { tag: m[1], text: text.slice(m[0].length) } : { tag: null, text };
+}
+
 function parseLoop(rest: string): Loop {
-  const loop: Loop = { id: "", created: "", key: null, text: "", owner: "", due: "", onExpiry: "" };
+  const loop: Loop = { id: "", created: "", key: null, text: "", owner: "", due: "", onExpiry: "", tag: null, after: null };
   let keySeen = false;
   const text: string[] = [];
   for (const raw of rest.split(" · ")) {
@@ -101,6 +132,8 @@ function parseLoop(rest: string): Loop {
     else if ((m = /^(?:from|от)\s+(.+)$/i.exec(f))) loop.owner = m[1].trim();
     else if ((m = /^(?:by|до)\s+(.+)$/i.exec(f))) loop.due = m[1].trim();
     else if ((m = /^(?:else|иначе)\s*:\s*(.*)$/i.exec(f))) loop.onExpiry = m[1].trim();
+    else if ((m = /^(?:after|после)\s+(L\d+)$/i.exec(f))) loop.after = m[1].toUpperCase();
+    else if (!loop.tag && (m = TAG_RE.exec(f))) loop.tag = m[1];
     else if (!loop.created && !keySeen && !text.length && DATE_RE.test(f)) loop.created = f;
     else if (!keySeen && !text.length && (KEY_ONLY_RE.test(f) || f === "—" || f === "-")) {
       keySeen = true;
@@ -108,6 +141,7 @@ function parseLoop(rest: string): Loop {
     } else text.push(f);
   }
   loop.text = text.join(" · ");
+  if (!loop.tag) Object.assign(loop, splitLeadingTag(loop.text));
   if (!loop.owner) {
     // "waiting for the review from Tom" written as one field.
     const m = /(?:^|\s)(?:from|от)\s+([\p{L}][\p{L}.'-]*)$/u.exec(loop.text);
@@ -118,7 +152,10 @@ function parseLoop(rest: string): Loop {
 
 export function formatLoop(l: Loop): string {
   const clean = (s: string): string => oneLine(s).replace(/ · /g, " - ");
-  const fields = [l.id, l.created, l.key ?? "—", clean(l.text), `from ${clean(l.owner)}`, l.due ? `by ${l.due}` : "", l.onExpiry ? `else: ${clean(l.onExpiry)}` : ""];
+  const fields = [
+    l.id, l.created, l.key ?? "—", l.tag ? `#${l.tag}` : "", clean(l.text), `from ${clean(l.owner)}`, l.due ? `by ${l.due}` : "",
+    l.after ? `after ${l.after}` : "", l.onExpiry ? `else: ${clean(l.onExpiry)}` : "",
+  ];
   return `- [ ] ${fields.filter(Boolean).join(" · ")}`;
 }
 
@@ -128,9 +165,9 @@ function readDoc(vault: string): Doc {
   const loops: Doc["loops"] = [];
   lines.forEach((line, i) => {
     const m = OPEN_RE.exec(line.trim());
-    if (m) loops.push({ ...parseLoop(m[1]), line: i });
+    if (m) loops.push({ ...parseLoop(m[1]), raw: line.trim(), line: i });
   });
-  return { lines, loops };
+  return { lines, loops, hash: contentHash(text) };
 }
 
 /** Every open loop in loops.md, in file order. */
@@ -138,8 +175,42 @@ export function readLoops(vault: string): Loop[] {
   return readDoc(vault).loops.map(({ line: _line, ...l }) => l);
 }
 
-function writeDoc(vault: string, doc: Doc): void {
-  writeFileAtomic(path.join(vault, LOOPS_FILE), doc.lines.join("\n").replace(/\n*$/, "\n"));
+/** Hash of loops.md as it is now (what a client sends back to say which version it saw). */
+export function loopsHash(vault: string): string {
+  return contentHash(readTextIfExists(path.join(vault, LOOPS_FILE)));
+}
+
+/** Writes the document unless loops.md changed since it was read. Returns false on a change. */
+function writeDoc(vault: string, doc: Doc): boolean {
+  const file = path.join(vault, LOOPS_FILE);
+  if (contentHash(readTextIfExists(file)) !== doc.hash) return false;
+  writeFileAtomic(file, doc.lines.join("\n").replace(/\n*$/, "\n"));
+  return true;
+}
+
+/** Test hook: runs between an operation's read and its write, to simulate a concurrent edit. */
+export const loopsTestHooks: { beforeWrite: (() => void) | null } = { beforeWrite: null };
+
+/**
+ * Read → change → compare-and-swap write, re-applied on a concurrent change. `op` returns the
+ * line it acts on (as read): if that line differs on a retry, the operation is refused.
+ */
+function edit<T>(vault: string, op: (doc: Doc) => { result: T; target?: string }): T {
+  let pinned: string | undefined;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const doc = readDoc(vault);
+    numberAll(vault, doc);
+    const { result, target } = op(doc);
+    if (target !== undefined) {
+      if (pinned === undefined) pinned = target;
+      else if (pinned !== target) throw new ConflictError(`That loop was edited in loops.md meanwhile (now: ${target}). Nothing was changed; run it again.`);
+    }
+    const hook = loopsTestHooks.beforeWrite;
+    loopsTestHooks.beforeWrite = null;
+    hook?.();
+    if (writeDoc(vault, doc)) return result;
+  }
+  throw new ConflictError("loops.md keeps changing while lf writes it: nothing was changed. Try again.");
 }
 
 /** Gives hand-written lines an id, so every loop can be closed or bumped by it. */
@@ -149,6 +220,7 @@ function numberAll(vault: string, doc: Doc): boolean {
   for (const l of missing) {
     l.id = nextId(vault, doc);
     doc.lines[l.line] = formatLoop(l);
+    l.raw = doc.lines[l.line];
   }
   return true;
 }
@@ -166,8 +238,9 @@ function nextId(vault: string, doc: Doc): string {
 /** Re-reads loops.md and numbers hand-written lines; returns the open loops. */
 export function syncLoops(vault: string): Loop[] {
   const doc = readDoc(vault);
+  // A concurrent edit wins: the numbering happens on the next read.
   if (numberAll(vault, doc)) writeDoc(vault, doc);
-  return doc.loops.map(({ line: _line, ...l }) => l);
+  return doc.loops.map(({ line: _line, ...l }) => ({ ...l, raw: doc.lines[_line].trim() }));
 }
 
 function findIn(doc: Doc, query: string): Loop & { line: number } {
@@ -192,43 +265,55 @@ export interface NewLoop {
   owner?: string;
   by: string;
   onExpiry?: string;
+  /** Branch tag; a leading "#tag " in the text works too. */
+  tag?: string | null;
+  /** The step this one follows. */
+  after?: string | null;
 }
 
-export function addLoop(vault: string, input: NewLoop, now: Date, workdayEnd?: string): Loop {
-  const text = oneLine(input.text);
-  if (!text) throw new UserError('Usage: lf loop "what I am waiting for" --by WHEN [--key KEY] [--from WHO] [--else "what then"]');
+/** Checks a new loop without writing anything: text, ticket, deadline, tag. */
+function buildLoop(vault: string, input: NewLoop, now: Date, workdayEnd?: string): Omit<Loop, "id"> {
+  const split = splitLeadingTag(oneLine(input.text));
+  const text = split.text;
+  if (!text) throw new UserError('Usage: lf loop "what I am waiting for" --by WHEN [--key KEY] [--from WHO] [--else "what then"] [--tag BRANCH]');
   const t = input.key ? requireTicket(vault, input.key) : null;
-  const doc = readDoc(vault);
-  numberAll(vault, doc);
-  const loop: Loop = {
-    id: nextId(vault, doc),
+  return {
     created: fmtStamp(now),
     key: t?.key ?? null,
     text,
     owner: oneLine(input.owner ?? "") || ME,
     due: parseWhen(input.by, now, workdayEnd),
     onExpiry: oneLine(input.onExpiry ?? ""),
+    tag: cleanTag(input.tag) ?? split.tag,
+    after: input.after ? input.after.toUpperCase() : null,
   };
-  doc.lines.push(formatLoop(loop));
-  writeDoc(vault, doc);
-  if (t && !isTracked(t)) setTracked(t, true);
+}
+
+export function addLoop(vault: string, input: NewLoop, now: Date, workdayEnd?: string): Loop {
+  const fields = buildLoop(vault, input, now, workdayEnd);
+  const loop = edit(vault, (doc) => {
+    const l: Loop = { id: nextId(vault, doc), ...fields };
+    doc.lines.push(formatLoop(l));
+    return { result: l };
+  });
+  if (loop.key) {
+    const t = requireTicket(vault, loop.key);
+    if (!isTracked(t)) setTracked(t, true);
+  }
   return loop;
 }
 
-/** Closes a loop: removes its line and logs it with the outcome. Returns where it was logged. */
-export function closeLoop(vault: string, query: string, outcome: string, now: Date): { loop: Loop; loggedTo: string } {
-  const doc = readDoc(vault);
-  numberAll(vault, doc);
-  const loop = findIn(doc, query);
-  doc.lines.splice(loop.line, 1);
-  writeDoc(vault, doc);
-  const who = loop.owner === ME ? "" : `, from ${loop.owner}`;
-  const line = `${oneLine(outcome) || "done"} (${loop.id}: ${loop.text}${who})`;
+/** The loop's id, tag and "after" as they go into the Log: "L3 #android, after L2". */
+function stepRef(l: Loop): string {
+  return `${l.id}${l.tag ? ` #${l.tag}` : ""}${l.after ? `, after ${l.after}` : ""}`;
+}
+
+function logLine(vault: string, loop: Loop, line: string, now: Date): string {
   if (loop.key) {
     try {
       const t = requireTicket(vault, loop.key);
       appendTicketLog(t, fmtStamp(now), line);
-      return { loop, loggedTo: path.join(t.rel, "notes.md") };
+      return path.join(t.rel, "notes.md");
     } catch {
       // The ticket folder is gone: keep the record in the archive instead.
     }
@@ -237,24 +322,122 @@ export function closeLoop(vault: string, query: string, outcome: string, now: Da
   const old = readTextIfExists(archive);
   const prev = old === null ? "# Closed loops without a ticket\n\n" : old.replace(/\n*$/, "\n");
   writeFileAtomic(archive, `${prev}- ${fmtStamp(now)} — ${loop.key ? `${loop.key}: ` : ""}${line}\n`);
-  return { loop, loggedTo: LOOPS_ARCHIVE };
+  return LOOPS_ARCHIVE;
 }
 
-/** Moves a loop's deadline; the ticket's Log records the move. */
-export function bumpLoop(vault: string, query: string, by: string, now: Date, workdayEnd?: string): { loop: Loop; was: string } {
-  const doc = readDoc(vault);
-  numberAll(vault, doc);
-  const loop = findIn(doc, query);
-  const was = loop.due;
-  loop.due = parseWhen(by, now, workdayEnd);
-  doc.lines[loop.line] = formatLoop(loop);
-  writeDoc(vault, doc);
+/** Refuses when the caller saw a different version of the loop's line (the web UI sends it). */
+function checkExpected(l: Loop & { raw?: string }, expect: string | undefined): void {
+  if (expect !== undefined && expect.trim() !== l.raw) {
+    throw new ConflictError(`${l.id} changed in loops.md since it was loaded (now: ${l.raw}). Reload and try again.`);
+  }
+}
+
+/** Closes a loop: removes its line and logs it with the outcome. Returns where it was logged. */
+export function closeLoop(vault: string, query: string, outcome: string, now: Date, opts: { expect?: string } = {}): { loop: Loop; loggedTo: string } {
+  const loop = edit(vault, (doc) => {
+    const l = findIn(doc, query);
+    checkExpected(l, opts.expect);
+    doc.lines.splice(l.line, 1);
+    const { line: _line, ...rest } = l;
+    return { result: rest, target: l.raw };
+  });
+  const who = loop.owner === ME ? "" : `, from ${loop.owner}`;
+  const loggedTo = logLine(vault, loop, `${oneLine(outcome) || "done"} (${stepRef(loop)}: ${loop.text}${who})`, now);
+  return { loop, loggedTo };
+}
+
+/** Moves a loop's deadline (and optionally its "else"); the ticket's Log records what it was. */
+export function bumpLoop(
+  vault: string, query: string, by: string, now: Date, workdayEnd?: string, opts: { onExpiry?: string; expect?: string } = {},
+): { loop: Loop; was: string; wasElse: string } {
+  const due = parseWhen(by, now, workdayEnd);
+  const r = edit(vault, (doc) => {
+    const l = findIn(doc, query);
+    checkExpected(l, opts.expect);
+    const target = l.raw;
+    const was = l.due;
+    const wasElse = l.onExpiry;
+    l.due = due;
+    if (opts.onExpiry !== undefined) l.onExpiry = oneLine(opts.onExpiry);
+    doc.lines[l.line] = formatLoop(l);
+    const { line: _line, ...loop } = l;
+    return { result: { loop: { ...loop, raw: doc.lines[l.line] }, was, wasElse }, target };
+  });
+  const { loop, was, wasElse } = r;
   if (loop.key) {
+    const elseNote = opts.onExpiry !== undefined && wasElse !== loop.onExpiry ? `; else: ${loop.onExpiry || "—"} (was: ${wasElse || "—"})` : "";
     try {
-      appendTicketLog(requireTicket(vault, loop.key), fmtStamp(now), `${loop.id} moved to ${loop.due}${was ? ` (was ${was})` : ""}: ${loop.text}`);
+      appendTicketLog(requireTicket(vault, loop.key), fmtStamp(now), `${stepRef(loop)} moved to ${loop.due}${was ? ` (was ${was})` : ""}${elseNote}: ${loop.text}`);
     } catch {
       // No ticket folder: nothing to log into.
     }
   }
-  return { loop, was };
+  return r;
+}
+
+/**
+ * Replaces one loop's line with an edited one (the web UI's text view). The new line goes through
+ * the same parser and checks as lf: same id, an existing ticket, a readable deadline, a text.
+ */
+export function replaceLoopLine(vault: string, id: string, newLine: string, expect: string | undefined): Loop {
+  const body = newLine.trim().replace(/^- \[ \]\s*/, "");
+  if (!body || /\n/.test(newLine.trim())) throw new UserError("One line, please: id · ticket · #tag · text · from WHO · by WHEN · after L1 · else: …");
+  const parsed = parseLoop(body);
+  if (parsed.id && parsed.id !== id) throw new UserError(`The id stays ${id} (the line says ${parsed.id}).`);
+  if (!parsed.text) throw new UserError("The line has no text.");
+  if (parsed.key) requireTicket(vault, parsed.key);
+  if (parsed.due && !dueAt(parsed.due)) throw new UserError(`Cannot read the deadline "${parsed.due}": use 2026-10-14 or "2026-10-14 12:00".`);
+  if (!parsed.due) throw new UserError("Every loop needs a deadline: by 2026-10-14 or by 2026-10-14 12:00.");
+  if (parsed.after && !/^L\d+$/.test(parsed.after)) throw new UserError(`"after" takes a loop id, e.g. after L3.`);
+  return edit(vault, (doc) => {
+    const l = findIn(doc, id);
+    checkExpected(l, expect);
+    const next: Loop = { ...parsed, id: l.id, created: parsed.created || l.created };
+    doc.lines[l.line] = formatLoop(next);
+    return { result: { ...next, raw: doc.lines[l.line] }, target: l.raw };
+  });
+}
+
+// ---------- branches ----------
+
+/** A closed step read back from a ticket's ## Log. */
+export interface ClosedStep {
+  id: string;
+  tag: string | null;
+  after: string | null;
+  text: string;
+  outcome: string;
+  date: string;
+}
+
+const CLOSED_RE = /^(.*) \((L\d+)(?: #([\p{L}\p{N}_-]+))?(?:, after (L\d+))?: (.+?)(?:, from [^()]+)?\)$/u;
+
+/** Closed steps in the Log lines (as written by closeLoop), oldest first. */
+export function closedSteps(log: Array<{ date: string; time: string; text: string }>): ClosedStep[] {
+  const out: ClosedStep[] = [];
+  for (const l of log) {
+    const m = CLOSED_RE.exec(l.text);
+    if (!m || / moved to /.test(l.text)) continue;
+    out.push({ outcome: m[1], id: m[2], tag: m[3] ?? null, after: m[4] ?? null, text: m[5], date: `${l.date}${l.time ? ` ${l.time}` : ""}` });
+  }
+  return out;
+}
+
+export interface Branch {
+  /** "" for steps without a tag. */
+  tag: string;
+  closed: ClosedStep[];
+  open: Loop[];
+}
+
+/** A ticket's work by branch: closed steps from its Log, then the open loops. Tagged branches first. */
+export function ticketBranches(log: Array<{ date: string; time: string; text: string }>, open: Loop[]): Branch[] {
+  const by = new Map<string, Branch>();
+  const get = (tag: string): Branch => {
+    if (!by.has(tag)) by.set(tag, { tag, closed: [], open: [] });
+    return by.get(tag)!;
+  };
+  for (const c of closedSteps(log)) get(c.tag ?? "").closed.push(c);
+  for (const l of open) get(l.tag ?? "").open.push(l);
+  return [...by.values()].sort((a, b) => (a.tag === "" ? 1 : b.tag === "" ? -1 : a.tag.localeCompare(b.tag)));
 }

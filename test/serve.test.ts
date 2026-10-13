@@ -340,11 +340,14 @@ test("PUT /api/file: bad JSON is 400, good body is saved", async () => {
   const noHeader = await fetch(`${base}/api/file`, { method: "PUT", body: "{}" });
   assert.equal(noHeader.status, 403);
 
-  const good = await fetch(`${base}/api/file`, {
+  const put = (hash?: string) => fetch(`${base}/api/file`, {
     method: "PUT",
     headers: { "x-localflow": "1", "content-type": "application/json" },
-    body: JSON.stringify({ path: "notes/ideas/First.md", body: "# First\n\nhello", head: "" }),
+    body: JSON.stringify({ path: "notes/ideas/First.md", body: "# First\n\nhello", head: "", ...(hash === undefined ? {} : { hash }) }),
   });
+  assert.equal((await put()).status, 400, "the hash of the loaded version is required");
+  const before = (await (await fetch(`${base}/api/file?path=${encodeURIComponent("notes/ideas/First.md")}`)).json()) as { hash: string };
+  const good = await put(before.hash);
   assert.equal(good.status, 200);
   assert.equal(fs.readFileSync(path.join(vault, "notes/ideas/First.md"), "utf8"), "# First\n\nhello\n");
 

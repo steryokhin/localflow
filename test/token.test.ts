@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { cmdInit } from "../src/commands.ts";
 import { loadConfig, readToken, tokenSource } from "../src/config.ts";
+import { runSecretCommand } from "../src/secret.ts";
 import type { Config } from "../src/config.ts";
 
 let tmp: string;
@@ -51,4 +52,14 @@ test("a legacy tokenFile in the config is refused", () => {
   raw.jira.tokenFile = "~/.config/localflow/jira-token";
   fs.writeFileSync(file, JSON.stringify(raw));
   assert.throws(() => loadConfig(tmp), /no longer supported/);
+});
+
+test("without a terminal a failing token command shows one hint, not its stderr", () => {
+  // The quotes split the word in argv, so "STACKTRACE" can only reach the message through stderr.
+  const argv = ["sh", "-c", "printf 'STACK''TRACE from the tool' >&2; exit 1"];
+  assert.throws(
+    () => runSecretCommand(argv, false),
+    (e: Error) => /Unlock the password manager/.test(e.message) && !/STACKTRACE/.test(e.message),
+  );
+  assert.throws(() => runSecretCommand(argv, true), (e: Error) => /exited with status 1/.test(e.message) && !/Unlock/.test(e.message));
 });

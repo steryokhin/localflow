@@ -50,14 +50,18 @@ Work
   serve [--port 7420] [--open]    local web UI on http://127.0.0.1:<port> (loopback only)
 
 Open loops (what I am waiting for, until when, and what to do then — kept in loops.md)
-  loop "TEXT" --by WHEN [--key KEY] [--from WHO] [--else "WHAT THEN"]
-                                  WHEN: +4h, +30m, +2d, 18:00, eod, tomorrow, 2026-10-14, "2026-10-14 12:00"
-  done ID|WORD ["outcome"] [--next "TEXT" --by WHEN [--from WHO] [--else "WHAT THEN"]]
+  loop "TEXT" --by WHEN [--key KEY] [--from WHO] [--else "WHAT THEN"] [--tag BRANCH]
+                                  WHEN: +4h, +30m, +2d, 18:00, eod, tomorrow, 2026-10-14, "2026-10-14 12:00";
+                                  --tag (or a leading "#branch" in TEXT) names a parallel branch of the ticket
+  done ID|WORD ["outcome"] [--next "TEXT" --by WHEN [--from WHO] [--else "WHAT THEN"] [--tag BRANCH]]
                                   close a loop (it goes to the ticket's ## Log); --next opens the
-                                  following one on the same ticket in the same call
-  bump ID|WORD --by WHEN          move a deadline (logged)
+                                  following one on the same ticket and branch, "after" the closed one
+  bump ID|WORD --by WHEN [--else "WHAT THEN"]
+                                  move a deadline, optionally with a new "else" (both logged)
   log KEY "TEXT"                  a line in the ticket's ## Log, without a loop
-  loops                           rebuild and print ACTIONS.md (expired first)
+  loops [--key KEY [--tag BRANCH]]
+                                  rebuild and print ACTIONS.md (expired first); --key: one ticket's
+                                  steps by branch, closed (from ## Log) and open
   watch [--quiet] [--plist]       one check: NUDGES.md + a macOS notification (--quiet: none);
                                   --plist prints a launchd agent that runs it every 15 minutes
   standup [--week]                done / doing / waiting / blockers, ready to paste
@@ -248,32 +252,34 @@ async function main(argv: string[]): Promise<number> {
 
     case "loop": {
       const { values, positionals } = parse(rest, {
-        key: { type: "string" }, from: { type: "string" }, by: { type: "string" }, else: { type: "string" },
+        key: { type: "string" }, from: { type: "string" }, by: { type: "string" }, else: { type: "string" }, tag: { type: "string" },
       });
       cmdLoop(resolveVault(values.vault as string | undefined), positionals.join(" "), {
         key: values.key as string | undefined,
         from: values.from as string | undefined,
         by: values.by as string | undefined,
         else: values.else as string | undefined,
+        tag: values.tag as string | undefined,
       });
       return 0;
     }
 
     case "done": {
       const { values, positionals } = parse(rest, {
-        next: { type: "string" }, by: { type: "string" }, from: { type: "string" }, else: { type: "string" },
+        next: { type: "string" }, by: { type: "string" }, from: { type: "string" }, else: { type: "string" }, tag: { type: "string" },
       });
-      if (values.next === undefined && (values.by || values.from || values.else)) throw new UserError("--by / --from / --else go with --next \"TEXT\".");
+      if (values.next === undefined && (values.by || values.from || values.else || values.tag)) throw new UserError("--by / --from / --else / --tag go with --next \"TEXT\".");
       const next = values.next === undefined ? undefined : {
         text: values.next as string, by: values.by as string | undefined, from: values.from as string | undefined, else: values.else as string | undefined,
+        tag: values.tag as string | undefined,
       };
       await cmdDone(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf done ID|WORD ["outcome"] [--next "TEXT" --by WHEN]'), positionals.slice(1).join(" "), next);
       return 0;
     }
 
     case "bump": {
-      const { values, positionals } = parse(rest, { by: { type: "string" } });
-      cmdBump(resolveVault(values.vault as string | undefined), need(positionals[0], "lf bump ID|WORD --by WHEN"), values.by as string | undefined);
+      const { values, positionals } = parse(rest, { by: { type: "string" }, else: { type: "string" } });
+      cmdBump(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf bump ID|WORD --by WHEN [--else "what then"]'), values.by as string | undefined, values.else as string | undefined);
       return 0;
     }
 
@@ -284,8 +290,8 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "loops": {
-      const { values } = parse(rest, {});
-      cmdLoops(resolveVault(values.vault as string | undefined));
+      const { values } = parse(rest, { key: { type: "string" }, tag: { type: "string" } });
+      cmdLoops(resolveVault(values.vault as string | undefined), { key: values.key as string | undefined, tag: values.tag as string | undefined });
       return 0;
     }
 

@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export class UserError extends Error {}
+/** The file changed on disk since the caller read it: nothing was written (HTTP 409). */
+export class ConflictError extends UserError {}
 
 export function expandHome(p: string): string {
   if (p === "~") return os.homedir();
@@ -84,4 +87,17 @@ const CLOUD_MARKERS = ["Mobile Documents", "CloudDocs", "CloudStorage", "Dropbox
 export function cloudSyncedMarker(p: string): string | null {
   const resolved = path.resolve(p);
   return CLOUD_MARKERS.find((m) => resolved.includes(m)) ?? null;
+}
+
+/** Short content hash used for compare-and-swap writes; a missing file has its own value. */
+export function contentHash(text: string | null): string {
+  return text === null ? "absent" : crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+/** Writes only if the file still has the content the caller read (by hash); else ConflictError. */
+export function writeIfUnchanged(file: string, expectedHash: string, data: string, what = path.basename(file)): void {
+  if (contentHash(readTextIfExists(file)) !== expectedHash) {
+    throw new ConflictError(`${what} changed on disk since it was loaded: nothing was saved. Reload to see the current version.`);
+  }
+  writeFileAtomic(file, data);
 }

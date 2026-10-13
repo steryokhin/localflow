@@ -56,10 +56,12 @@ test("notifications run osascript only, without a shell", () => {
   assert.doesNotMatch(notify, /shell\s*:\s*true|execSync|exec\(|\bsh\b/);
 });
 
-test("the token command runs without a shell and never captures more than stdout", () => {
+test("the token command runs without a shell; captured stderr is never shown", () => {
   const secret = fs.readFileSync(path.join(SRC, "secret.ts"), "utf8");
   assert.doesNotMatch(secret, /shell\s*:\s*true|execSync|exec\(/);
-  assert.match(secret, /stdio: \["inherit", "pipe", "inherit"\]/);
+  // A terminal keeps stderr for the password prompt; without one, stderr is captured (not shown).
+  assert.doesNotMatch(secret, /\.stderr\b(?!\.isTTY)/, "the password manager's stderr is never printed or put into an error");
+  assert.match(secret, /interactive \? \(\["inherit", "pipe", "inherit"\] as const\) : \(\["inherit", "pipe", "pipe"\] as const\)/);
 });
 
 test("the Jira client contains no write methods", () => {

@@ -72,7 +72,7 @@ function who(l: Loop): string {
 function loopLine(l: Loop, now: Date, opts: { overdue?: boolean } = {}): string {
   const at = dueAt(l.due);
   const when = opts.overdue && at ? `was due ${fmtDue(l.due, now)}, ${fmtSpan(now.getTime() - at.getTime())} ago` : `by ${fmtDue(l.due, now)}`;
-  return `- ${l.id} · ${l.key ?? "—"} · ${l.text}${who(l)} · ${when}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
+  return `- ${l.id} · ${l.key ?? "—"}${l.tag ? ` #${l.tag}` : ""} · ${l.text}${who(l)} · ${when}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
 }
 
 function lastLog(t: Ticket): string | null {
