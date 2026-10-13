@@ -89,9 +89,11 @@ An empty inbox is a valid result: say "nothing new".
 | Merged | `lf status KEY done` — only when the user says so |
 | End of session | `lf commit` — notes go into the vault's local git |
 
-The status in `notes.md` belongs to the user; the sync never moves it. When Jira is further along
-(e.g. the ticket was closed), `lf ls` shows `[Jira is ahead: done]` — mention it; the user changes
-the status.
+Two statuses live side by side: Jira's (`jira_status` in `ticket.md`, moved only by the sync) and the
+user's (`status` in `notes.md`, which the sync never moves). When they disagree, `lf ls` marks the
+ticket `[≠ mine: inbox, Jira: inprogress — lf align KEY]` — mention it. `lf align KEY` (or
+`--all`, with `--dry-run` first) copies Jira's status into the user's through the status mapping;
+run it when the user asks. It never writes to Jira. `lf ls --by jira` groups by Jira's status.
 
 ## Ticket files
 
@@ -127,12 +129,23 @@ each; next steps and waits live **only** there (not in notes.md, not in actions.
   → "loop L3: waiting for Tom until 15:00, else ping in #ios-reviews". Pick a sensible deadline
   and mention it; the user corrects it if needed. `lf loop` without `--key` is fine for loops
   that have no ticket (onboarding, a question to someone).
-- **Close them** when the conversation shows the wait is over ("Tom approved"): `lf done L3 "Tom
-  approved, 2 comments"` — the line moves to the ticket's `## Log`. If a next wait follows, add it.
+- **Chain rule, always.** Closing a loop always opens the next one: a `me` loop is the user's next
+  step, a `from <who>` loop is a delegation. Do both in one call:
+  `lf done L3 "Tom approved, 2 comments" --next "merge after CI" --by +2h` (add `--from WHO`,
+  `--else "…"` as needed; the next loop gets the same ticket). If the next step is unclear, ask
+  "next one, or take the ticket off the board?" instead of closing silently. The closed line goes
+  to the ticket's `## Log`.
+- **Plain words are enough.** When the user reports an action ("wrote to QA", "Chloe approved",
+  "move it to tomorrow"), write the loop / done / bump right away and confirm in one line. Do not
+  ask where a sensible deadline can be picked; mention the one you chose.
 - **Moving a deadline** is the user's call: `lf bump L3 --by tomorrow` only when they say so.
+- **A tracked ticket always has at least one open loop.** It comes off the board only on the user's
+  explicit word (`lf untrack KEY`) — never because it is Done in Jira or has gone quiet.
 - **Start of a session:** read `<vault>/NUDGES.md` (written by `lf watch` every 15 minutes) or run
   `lf loops`, and if something expired, offer it first: "2 expired: ping Tom? move Lena's to
-  tomorrow?". Expired loops are the frog: they come before anything else.
+  tomorrow?". Expired loops are the frog: they come before anything else. Then list the tracked
+  tickets with no open loop (the last section of `lf loops`) and ask about each: "next loop, or
+  untrack?".
 - **After working on a ticket**, one dated line of what happened: `lf log EXP-123 "split the fix
   into two PRs"`.
 - Daily or weekly meeting: `lf standup` / `lf standup --week` and hand the output over as it is.
@@ -172,7 +185,11 @@ the report — `lf commit` first.
 
 - `lf inbox --group activity|mine|tracked|waiting` — smart groups: unread changes in the user's and
   tracked tickets, assigned to them, tracked, waiting on someone. `INBOX.md` has them in that order.
-- `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`.
+- The web UI has smart folders over the whole vault (Activity, My Jira, Tracking, Waiting, No loops),
+  configurable in `localflow.json` → `smartFolders`; plus Loops and Standup pages that write the same
+  `loops.md` and `## Log` as the CLI.
+- `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`,
+  `--by jira` to group by Jira's status.
 - Text search — Grep over `projects/**/ticket.md` and `notes.md`. There is deliberately no vector search.
 
 ## Web UI

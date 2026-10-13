@@ -9,7 +9,6 @@ import { dueAt, fmtDay, ME, LOOPS_ARCHIVE } from "../vault/loops.ts";
 import type { Loop } from "../vault/loops.ts";
 import { isTracked, readLog, readLogLines } from "../vault/notes.ts";
 import type { LogLine } from "../vault/notes.ts";
-import { PLAN_FILE } from "../vault/scaffold.ts";
 import { NOTES_FILE } from "../vault/store.ts";
 import type { Ticket } from "../vault/store.ts";
 
@@ -76,21 +75,18 @@ function loopLine(l: Loop, now: Date, opts: { overdue?: boolean } = {}): string 
   return `- ${l.id} · ${l.key ?? "—"} · ${l.text}${who(l)} · ${when}${l.onExpiry ? ` · else: ${l.onExpiry}` : ""}`;
 }
 
-/** Unchecked, non-empty "- [ ] step" items in actions.md: the ticket has a plan of its own. */
-function hasPlan(t: Ticket): boolean {
-  const text = readTextIfExists(path.join(t.dir, PLAN_FILE));
-  return !!text && /^\s*- \[ \][ \t]*\S/m.test(text);
-}
-
 function lastLog(t: Ticket): string | null {
   const log = readLog(readTextIfExists(path.join(t.dir, NOTES_FILE)) ?? "");
   return log.length ? log[log.length - 1].date : null;
 }
 
-/** Tracked, still-open tickets with neither an open loop nor a plan: candidates for `lf untrack`. */
+/**
+ * Tracked, still-open tickets without an open loop. A tracked ticket always has at least one (a plan
+ * in actions.md is not a loop): each of these needs a next loop, or `lf untrack` on the user's word.
+ */
 export function idleTickets(tickets: Ticket[], loops: Loop[]): Ticket[] {
   const withLoops = new Set(loops.map((l) => l.key).filter(Boolean));
-  return tickets.filter((t) => isTracked(t) && !CLOSED.includes(t.status) && !withLoops.has(t.key) && !hasPlan(t));
+  return tickets.filter((t) => isTracked(t) && !CLOSED.includes(t.status) && !withLoops.has(t.key));
 }
 
 export function renderActions(loops: Loop[], tickets: Ticket[], now: Date): string {
@@ -113,7 +109,7 @@ export function renderActions(loops: Loop[], tickets: Ticket[], now: Date): stri
     const last = lastLog(t);
     return `- ${t.key} · ${t.title} · ${last ? `last log ${last}` : "nothing logged"} → \`lf loop … --key ${t.key}\` or \`lf untrack ${t.key}\``;
   });
-  section("❓ Tracked tickets without loops or a plan", idle);
+  section("❓ Tracked tickets without an open loop", idle);
   if (!loops.length) lines.push("_No open loops. Add one with `lf loop \"what I am waiting for\" --by +4h --key KEY`._", "");
   return lines.join("\n").trimEnd() + "\n";
 }

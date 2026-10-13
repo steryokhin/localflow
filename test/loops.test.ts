@@ -117,7 +117,7 @@ test("the board puts expired loops first and lists tracked tickets that have not
   setTracked(findTicket(vault, "WORK-003")!, true);
   assert.deepEqual(idleTickets(listTickets(vault), loops).map((t) => t.key), ["WORK-003"]);
   fs.writeFileSync(path.join(findTicket(vault, "WORK-003")!.dir, "actions.md"), "# Plan\n\n- [ ] step one\n");
-  assert.deepEqual(idleTickets(listTickets(vault), loops), [], "a plan with open steps counts as something going on");
+  assert.deepEqual(idleTickets(listTickets(vault), loops).map((t) => t.key), ["WORK-003"], "a plan is not a loop: the ticket still needs one");
 
   const board = renderActions(loops, listTickets(vault), later);
   assert.match(board, /## 🐸 Expired \(1\)\n\n- L4 · WORK-001 · QA feedback on build 1\.0\.4 · from Lena · was due 13 Oct, \d+h ago/);

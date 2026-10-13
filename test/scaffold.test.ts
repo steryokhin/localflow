@@ -42,7 +42,7 @@ test("lf start tracks the ticket and creates ai-summary.md and actions.md once",
   assert.match(read("WORK-001", "ai-summary.md"), /^ticket: WORK-001$/m);
   assert.match(read("WORK-001", "ai-summary.md"), /## Open questions/);
   assert.match(read("WORK-001", "actions.md"), /# WORK-001 — plan/);
-  // An empty template checkbox is not a plan yet: the ticket still shows up as idle on the board.
+  // No loop yet: the ticket shows up as idle on the board.
   assert.deepEqual(idleTickets(listTickets(vault), []).map((t) => t.key), ["WORK-001"]);
 
   fs.writeFileSync(path.join(dir("WORK-001"), "actions.md"), "mine\n");
