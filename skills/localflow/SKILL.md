@@ -138,7 +138,16 @@ each; next steps and waits live **only** there (not in notes.md, not in actions.
 - **Plain words are enough.** When the user reports an action ("wrote to QA", "Chloe approved",
   "move it to tomorrow"), write the loop / done / bump right away and confirm in one line. Do not
   ask where a sensible deadline can be picked; mention the one you chose.
-- **Moving a deadline** is the user's call: `lf bump L3 --by tomorrow` only when they say so.
+- **Branches.** One ticket can run several lines of work at once (an Android check, an a11y ticket,
+  the web scope). Give each a tag: `lf loop "#android QA check" --key EXP-123 …` or `--tag android`.
+  `lf done … --next` keeps the tag and records `after L3` by itself, so the ladder of steps stays
+  linked; `lf loops --key EXP-123 [--tag android]` shows a branch: closed steps with their outcome
+  (from `## Log`), then the open one.
+- **Moving a deadline** is the user's call: `lf bump L3 --by tomorrow` only when they say so; add
+  `--else "…"` when the fallback changes too (the old deadline and the old else go to the Log).
+- **loops.md may change under you** (the user edits it by hand or in the web UI). `lf` re-reads and
+  re-applies by id; if the loop's own line changed or is gone, the command fails — read
+  `lf loops` again and redo it, do not edit the file around the error.
 - **A tracked ticket always has at least one open loop.** It comes off the board only on the user's
   explicit word (`lf untrack KEY`) — never because it is Done in Jira or has gone quiet.
 - **Start of a session:** read `<vault>/NUDGES.md` (written by `lf watch` every 15 minutes) or run

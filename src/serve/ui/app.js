@@ -23,6 +23,9 @@
   const SMART_KEY = "lf.smart";
   // Which status the Status section and the filters go by: "local" (mine, notes.md) or "jira".
   const STATUS_BY_KEY = "lf.statusBy";
+  // The Loops page: "board" or "text", and the board grouped "state" or "ticket".
+  const LOOPS_VIEW_KEY = "lf.loopsView";
+  const LOOPS_GROUP_KEY = "lf.loopsGroup";
   // Keys of tickets whose children are folded away in the list.
   const COLLAPSED_KEY = "lf.collapsed";
   // Linked folders (absolute paths) whose file lists are folded away in the folder pane.
@@ -60,7 +63,7 @@
     }
     const res = await fetch(path, opts);
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
     return data;
   }
 
@@ -98,6 +101,9 @@
     alignConfirm: false, // the bulk "Align N" button is asking for confirmation
     loopForm: null,      // { id, kind: "done" | "bump" } of the loop whose inline form is open
     standupWeek: false,
+    loopsView: store(LOOPS_VIEW_KEY) === "text" ? "text" : "board",
+    loopsGroup: store(LOOPS_GROUP_KEY) === "ticket" ? "ticket" : "state",
+    lineErrors: {},      // loop id -> { line, error } for the text view
     collapsed: new Set(readList(COLLAPSED_KEY)),
     linkedCollapsed: new Set(readList(LINKED_COLLAPSED_KEY)),
     confirmGroup: null, // group whose "Delete? Yes/No" is showing
@@ -413,7 +419,8 @@
   /** True while a drag or an inline input is active: live refresh must not redraw under it. */
   function busy() {
     // An open Done/Bump form, or a new loop half typed, must not be redrawn away.
-    const typing = [...document.querySelectorAll(".lpf.add input")].some((i) => i.value.trim());
+    const typing = [...document.querySelectorAll(".lpf.add input")].some((i) => i.value.trim()) ||
+      [...document.querySelectorAll("input.tli")].some((i) => i.value !== i.defaultValue);
     return !!state.dragKey || typing || !!document.querySelector("input.inl, .lpf[data-for]");
   }
 
@@ -727,16 +734,19 @@
       ? `<a class="lk" href="#/t/${esc(l.key)}" title="${esc(l.title || "")}">${esc(l.key)}</a>${l.title ? `<span class="lt">${esc(l.title)}</span>` : ""}`
       : `<span class="lt">no ticket</span>`;
     const who = l.owner === "me" ? `<span class="who me">on me</span>` : `<span class="who">from ${esc(l.owner)}</span>`;
-    let h = `<div class="lp${l.expired ? " x" : ""}" data-loop="${esc(l.id)}"><div class="l1">` +
-      `<span class="id">${esc(l.id)}</span>${ticket}<span class="tx">${esc(l.text)}</span></div>` +
+    const tag = l.tag && !opts.noTag ? `<span class="tag">#${esc(l.tag)}</span>` : "";
+    const after = l.after ? `<span class="aft" title="the step this one follows">after ${esc(l.after)}</span>` : "";
+    let h = `<div class="lp${l.expired ? " x" : ""}" data-loop="${esc(l.id)}" data-raw="${esc(l.raw || "")}"><div class="l1">` +
+      `<span class="id">${esc(l.id)}</span>${ticket}${tag}<span class="tx">${esc(l.text)}</span>${after}</div>` +
       `<div class="l2">${who}<span class="due${l.expired ? " x" : ""}">${l.expired ? "was due" : "by"} ${esc(l.dueLabel)}</span>` +
       (l.onExpiry ? `<span class="else">else: ${esc(l.onExpiry)}</span>` : "") +
       `<span class="acts"><button class="btn" data-ldone="${esc(l.id)}">Done</button><button class="btn ghost" data-lbump="${esc(l.id)}">Bump</button></span></div>`;
     const f = state.loopForm;
     if (f && f.id === l.id && f.kind === "done") {
       h += `<form class="lpf" data-for="${esc(l.id)}"><label>Outcome<input name="outcome" placeholder="Tom approved, 2 comments" autocomplete="off"></label>` +
-        `<div class="nx"><b>Next loop${l.key ? ` for ${esc(l.key)}` : ""}</b>` +
+        `<div class="nx"><b>Next loop${l.key ? ` for ${esc(l.key)}` : ""}${l.tag ? ` on #${esc(l.tag)}` : ""}, after ${esc(l.id)}</b>` +
         `<input name="text" placeholder="what next / what I am waiting for" autocomplete="off">` +
+        `<input name="tag" class="k" placeholder="#branch" value="${esc(l.tag ? `#${l.tag}` : "")}" autocomplete="off" title="Branch tag, kept from ${esc(l.id)}">` +
         `<input name="by" placeholder="by: ${BY_HINT}" autocomplete="off"><input name="from" placeholder="from (empty = me)" autocomplete="off">` +
         `<input name="else" placeholder="else: what then" autocomplete="off"></div>` +
         `<div class="fb"><button class="btn" type="submit" name="act" value="next">Close + add next</button>` +
@@ -744,6 +754,7 @@
     }
     if (f && f.id === l.id && f.kind === "bump") {
       h += `<form class="lpf" data-for="${esc(l.id)}"><div class="nx"><input name="by" placeholder="new deadline: ${BY_HINT}" autocomplete="off">` +
+        `<input name="else" placeholder="else: what then" value="${esc(l.onExpiry)}" autocomplete="off" title="Change what to do if the new deadline passes">` +
         `<button class="btn" type="submit">Move</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div></form>`;
     }
     return h + `</div>`;
@@ -752,6 +763,7 @@
   function addLoopForm(key) {
     return `<form class="lpf add" data-add="${esc(key || "")}"><div class="nx"><input name="text" placeholder="New loop: what I am waiting for / my next step" autocomplete="off">` +
       (key ? "" : `<input name="key" placeholder="ticket (optional)" autocomplete="off" class="k">`) +
+      `<input name="tag" class="k" placeholder="#branch (optional)" autocomplete="off">` +
       `<input name="by" placeholder="by: ${BY_HINT}" autocomplete="off"><input name="from" placeholder="from (empty = me)" autocomplete="off">` +
       `<input name="else" placeholder="else: what then" autocomplete="off"><button class="btn" type="submit">Add</button></div></form>`;
   }
@@ -785,9 +797,12 @@
     }));
     root.querySelectorAll(".lpf[data-for]").forEach((form) => {
       const id = form.dataset.for;
+      // The line as this page saw it: the server refuses if loops.md has a different one now.
+      const card = form.closest("[data-raw]");
+      const expect = card && card.dataset.raw ? card.dataset.raw : undefined;
       const done = async (next) => {
         try {
-          const r = await api("POST", "/api/loop/done", { id, outcome: formVal(form, "outcome"), next });
+          const r = await api("POST", "/api/loop/done", { id, outcome: formVal(form, "outcome"), next, expect });
           toast(`Closed ${r.closed.id}${r.next ? `, next: ${r.next.id}` : ""} → ${r.loggedTo}`, true, 4000);
           await afterLoopChange();
           flushPending();
@@ -799,8 +814,8 @@
         e.preventDefault();
         if (state.loopForm && state.loopForm.kind === "bump") {
           try {
-            const r = await api("POST", "/api/loop/bump", { id, by: formVal(form, "by") });
-            toast(`${r.loop.id} moved to ${r.loop.due}`, true);
+            const r = await api("POST", "/api/loop/bump", { id, by: formVal(form, "by"), else: formVal(form, "else"), expect });
+            toast(`${r.loop.id} moved to ${r.loop.due}${r.wasElse !== r.loop.onExpiry ? `, else: ${r.loop.onExpiry || "—"}` : ""}`, true);
             await afterLoopChange();
             flushPending();
           } catch (err) { toast(err.message); }
@@ -810,14 +825,14 @@
           toast("The next loop needs a text and a deadline — or use “Close, no next step”.");
           return;
         }
-        await done({ text: formVal(form, "text"), by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else") });
+        await done({ text: formVal(form, "text"), by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else"), tag: formVal(form, "tag") });
       });
     });
     root.querySelectorAll(".lpf[data-add]").forEach((form) => form.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
         const key = form.dataset.add || formVal(form, "key").toUpperCase();
-        const l = await api("POST", "/api/loop", { text: formVal(form, "text"), key, by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else") });
+        const l = await api("POST", "/api/loop", { text: formVal(form, "text"), key, by: formVal(form, "by"), from: formVal(form, "from"), else: formVal(form, "else"), tag: formVal(form, "tag") });
         toast(`Loop ${l.id}: ${l.owner === "me" ? "on me" : `waiting for ${l.owner}`} by ${l.due}`, true);
         await afterLoopChange();
       } catch (err) { toast(err.message); }
@@ -830,8 +845,19 @@
     let h = `<div class="tloops${compact ? " compact" : ""}"><div class="lh2"><b>Loops</b><span>${t.loops.length} open</span>` +
       (compact ? `<a href="#/t/${esc(t.row.key)}/loops">log & new loop →</a>` : "") + `</div>`;
     if (!t.loops.length) h += `<div class="none">${t.row.tracked ? "Tracked, but no open loop: add the next step, or untrack it (lf untrack)." : "No open loops."}</div>`;
-    for (const l of t.loops) h += loopLine(l, { ticket: false });
+    if (compact) for (const l of t.loops) h += loopLine(l, { ticket: false });
     if (!compact) {
+      // The ladder of steps by branch: closed ones with their outcome, then the open ones.
+      for (const b of t.branches) {
+        h += `<div class="br"><div class="brh">${b.tag ? `<span class="tag">#${esc(b.tag)}</span>` : `<span class="lt">no branch</span>`}` +
+          `<span>${b.closed.length} closed · ${b.open.length} open</span></div>`;
+        for (const c of b.closed) {
+          h += `<div class="st"><span class="ok">✓</span><span class="id">${esc(c.id)}</span><span class="tx">${esc(c.text)}</span>` +
+            `<span class="oc">→ ${esc(c.outcome)}</span><time>${esc(c.date.slice(5))}</time></div>`;
+        }
+        for (const l of b.open) h += loopLine(l, { ticket: false, noTag: true });
+        h += `</div>`;
+      }
       h += addLoopForm(t.row.key);
       h += `<div class="lh2"><b>Log</b><span>last ${t.log.length}, notes.md</span></div>`;
       if (!t.log.length) h += `<div class="none">Nothing logged yet.</div>`;
@@ -846,20 +872,124 @@
     wireLoops($("content"));
   }
 
+  /** Expired first, then by deadline (a date alone means the end of that day). */
+  const dueKey = (l) => `${l.expired ? 0 : 1} ${l.due.length === 10 ? `${l.due} 23:59` : l.due || "9999"}`;
+  const byDue = (a, b) => dueKey(a).localeCompare(dueKey(b));
+
+  /** Loops by ticket (key + title, link), inside by branch tag; loops without a ticket last. */
+  function byTicket(all) {
+    const groups = new Map();
+    for (const l of [...all].sort(byDue)) {
+      const k = l.key || "";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(l);
+    }
+    const keys = [...groups.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : dueKey(groups.get(a)[0]).localeCompare(dueKey(groups.get(b)[0]))));
+    return keys.map((k) => ({ key: k, title: groups.get(k)[0].title, loops: groups.get(k) }));
+  }
+
+  function seg(attr, value, options) {
+    return `<span class="seg">` + options.map(([v, label]) => `<button data-${attr}="${v}" class="${value === v ? "on" : ""}">${label}</button>`).join("") + `</span>`;
+  }
+
   async function renderLoopBoard() {
     let b;
     try { b = await api("GET", "/api/loops"); } catch (err) { toast(err.message); return; }
     if (state.route.kind !== "loops") return;
-    const section = (title, cls, items, empty) =>
-      `<div class="ls ${cls}"><h3>${title}<span>${items.length}</span></h3>` +
-      (items.length ? items.map((l) => loopLine(l, { ticket: true })).join("") : `<div class="none">${empty}</div>`) + `</div>`;
-    let h = `<div class="scroll"><div class="board"><div class="hh"><h2>Loops</h2><span>loops.md · expired first</span></div>` + addLoopForm("");
-    h += section("🐸 Expired", "x", b.expired, "Nothing expired — no frog today.");
-    h += section("⏰ Due today", "td", b.today, "Nothing else due today.");
-    h += section("⚪ On me", "me", b.mine, "No later steps of mine.");
-    h += section("🟡 Waiting on people", "wt", b.waiting, "Nobody owes me anything later.");
+    const all = [...b.expired, ...b.today, ...b.mine, ...b.waiting];
+    let h = `<div class="scroll"><div class="board"><div class="hh"><h2>Loops</h2><span>loops.md</span>` +
+      seg("lview", state.loopsView, [["board", "Board"], ["text", "Text"]]) +
+      (state.loopsView === "board" ? seg("lgroup", state.loopsGroup, [["state", "By state"], ["ticket", "By ticket"]]) : "") + `</div>`;
+    if (state.loopsView === "text") h += loopsText(all);
+    else {
+      h += addLoopForm("");
+      if (state.loopsGroup === "ticket") {
+        if (!all.length) h += `<div class="none">No open loops.</div>`;
+        for (const g of byTicket(all)) {
+          h += `<div class="ls tk"><h3>${g.key ? `<a href="#/t/${esc(g.key)}">${esc(g.key)}</a> ${esc(g.title || "")}` : "No ticket"}<span>${g.loops.length}</span></h3>`;
+          const tags = [...new Set(g.loops.map((l) => l.tag || ""))].sort((a, c) => (a === "" ? 1 : c === "" ? -1 : 0));
+          for (const tag of tags) {
+            const ls = g.loops.filter((l) => (l.tag || "") === tag);
+            if (tags.length > 1 || tag) h += `<div class="brh">${tag ? `<span class="tag">#${esc(tag)}</span>` : `<span class="lt">no branch</span>`}</div>`;
+            h += ls.map((l) => loopLine(l, { ticket: false, noTag: true })).join("");
+          }
+          h += `</div>`;
+        }
+      } else {
+        const section = (title, cls, items, empty) =>
+          `<div class="ls ${cls}"><h3>${title}<span>${items.length}</span></h3>` +
+          (items.length ? items.map((l) => loopLine(l, { ticket: true })).join("") : `<div class="none">${empty}</div>`) + `</div>`;
+        h += section("🐸 Expired", "x", b.expired, "Nothing expired — no frog today.");
+        h += section("⏰ Due today", "td", b.today, "Nothing else due today.");
+        h += section("⚪ On me", "me", b.mine, "No later steps of mine.");
+        h += section("🟡 Waiting on people", "wt", b.waiting, "Nobody owes me anything later.");
+      }
+    }
     $("content").innerHTML = h + `</div></div>`;
-    wireLoops($("content"));
+    $("content").querySelectorAll("[data-lview]").forEach((x) => x.addEventListener("click", () => {
+      state.loopsView = x.dataset.lview;
+      save(LOOPS_VIEW_KEY, state.loopsView);
+      renderContent();
+    }));
+    $("content").querySelectorAll("[data-lgroup]").forEach((x) => x.addEventListener("click", () => {
+      state.loopsGroup = x.dataset.lgroup;
+      save(LOOPS_GROUP_KEY, state.loopsGroup);
+      renderContent();
+    }));
+    if (state.loopsView === "text") wireLoopsText();
+    else wireLoops($("content"));
+  }
+
+  /**
+   * loops.md lines as they are, grouped by ticket, each editable in place. A change goes through the
+   * server's parser and checks; an error stays on the line and nothing is saved.
+   */
+  function loopsText(all) {
+    let h = `<div class="src">One line per loop: <code>id · created · ticket · #branch · text · from WHO · by WHEN · after L1 · else: …</code>. ` +
+      `Enter saves the line; Escape puts it back. <a href="#/n/loops.md">Edit loops.md as a file</a></div>`;
+    if (!all.length) h += `<div class="none">No open loops.</div>`;
+    for (const g of byTicket(all)) {
+      h += `<div class="ls tk"><h3>${g.key ? `<a href="#/t/${esc(g.key)}">${esc(g.key)}</a> ${esc(g.title || "")}` : "No ticket"}<span>${g.loops.length}</span></h3>`;
+      for (const l of g.loops) {
+        const e = state.lineErrors[l.id];
+        const value = e ? e.line : l.raw.replace(/^- \[ \] /, "");
+        h += `<div class="tl${e ? " err" : ""}"><input class="tli" data-lid="${esc(l.id)}" data-raw="${esc(l.raw)}" value="${esc(value)}" spellcheck="false" autocomplete="off">` +
+          (e ? `<div class="te">${esc(e.error)}</div>` : "") + `</div>`;
+      }
+      h += `</div>`;
+    }
+    return h;
+  }
+
+  function wireLoopsText() {
+    $("content").querySelectorAll("input.tli").forEach((input) => {
+      const id = input.dataset.lid;
+      const original = input.dataset.raw.replace(/^- \[ \] /, "");
+      input.addEventListener("keydown", async (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          delete state.lineErrors[id];
+          renderContent();
+          return;
+        }
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        if (input.value.trim() === original.trim()) return;
+        input.disabled = true;
+        try {
+          const l = await api("PUT", "/api/loop/line", { id, line: input.value, expect: input.dataset.raw });
+          delete state.lineErrors[id];
+          toast(`${l.id} saved`, true);
+          await loadOverview();
+          await renderContent();
+        } catch (err) {
+          state.lineErrors[id] = { line: input.value, error: err.message };
+          await renderContent();
+          const again = $("content").querySelector(`input.tli[data-lid="${CSS.escape(id)}"]`);
+          if (again) again.focus();
+        }
+      });
+    });
   }
 
   async function renderStandup() {
@@ -1020,6 +1150,9 @@
     constructor(view, opts) {
       this.rel = view.rel;
       this.head = view.head;
+      // The version this editor was built from: saves are refused (409) if the file changed since.
+      this.hash = view.hash;
+      this.conflict = false;
       this.editable = view.editable;
       this.blocks = view.blocks.map((b) => ({ src: b.src, html: b.html }));
       if (!this.blocks.length) this.blocks.push({ src: "", html: "" });
@@ -1197,11 +1330,17 @@
       clearTimeout(this.saveTimer);
       try {
         // Keep the blank line between the frontmatter and the body, as `lf` writes it.
-        await api("PUT", "/api/file", { path: this.rel, body: this.text(), head: this.head ? `${this.head}\n` : "" });
+        const r = await api("PUT", "/api/file", { path: this.rel, body: this.text(), head: this.head ? `${this.head}\n` : "", hash: this.hash });
+        this.hash = r.hash;
         this.dirty = false;
+        this.conflict = false;
         this.savedAt = fmtTime(new Date().toISOString());
         this.updateHint();
-      } catch (err) { toast(err.message); }
+      } catch (err) {
+        // Never overwrite a newer version: keep the text here and let the user decide.
+        if (err.status === 409) { this.conflict = true; this.updateHint(); }
+        toast(err.message, false, 9000);
+      }
     }
 
     /** True when the file on disk no longer matches what this editor was built from. */
@@ -1215,6 +1354,15 @@
     updateHint() {
       const el = $("savehint");
       if (!el) return;
+      if (this.conflict) {
+        el.className = "hint dirty";
+        el.innerHTML = `Changed on disk — not saved <button class="btn" id="cfcopy">Copy my text</button><button class="btn" id="cfreload">Reload (drops my edits)</button>`;
+        $("cfcopy").addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(this.text()); toast("Your text is in the clipboard", true); } catch { toast("Copy failed"); }
+        });
+        $("cfreload").addEventListener("click", () => { this.dirty = false; this.conflict = false; renderContent(); });
+        return;
+      }
       el.className = "hint" + (this.dirty ? " dirty" : "");
       const saved = this.savedAt ? "Saved " + esc(this.savedAt) : "Saved";
       el.innerHTML = this.dirty ? "Unsaved · <kbd>⌘S</kbd>" : this.editing ? `${saved} · <kbd>⌘S</kbd> to save` : `${saved} · double-click a block to edit`;
@@ -1222,7 +1370,7 @@
 
     destroy() {
       clearTimeout(this.saveTimer);
-      if (this.dirty) this.save();
+      if (this.dirty && !this.conflict) this.save();
     }
   }
 
@@ -1242,7 +1390,16 @@
     $("content").querySelectorAll("[data-fm]").forEach((el) => {
       el.addEventListener("change", async () => {
         try {
-          await api("POST", "/api/frontmatter", { path: view.rel, updates: { [el.dataset.fm]: el.value } });
+          const ed = state.editor && state.editor.rel === view.rel ? state.editor : null;
+          const r = await api("POST", "/api/frontmatter", { path: view.rel, updates: { [el.dataset.fm]: el.value }, hash: ed ? ed.hash : view.hash });
+          view.hash = r.hash;
+          // The editor keeps the frontmatter verbatim on save: take the new one, or a later body
+          // save would put the old value back.
+          if (ed) {
+            const fresh = await api("GET", `/api/file?path=${encodeURIComponent(view.rel)}`);
+            ed.head = fresh.head;
+            ed.hash = fresh.hash;
+          }
           await loadOverview();
           if (state.route.kind === "ticket") {
             state.ticket = await api("GET", `/api/ticket/${state.route.key}`);

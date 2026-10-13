@@ -53,7 +53,7 @@ interface Doc {
 
 const HEADER = `# Open loops
 
-<!-- One line per loop: id · opened · ticket · what · from WHO · by WHEN · else: WHAT TO DO.
+<!-- One line per loop: id · opened · ticket · #branch · what · from WHO · by WHEN · after L1 · else: WHAT TO DO.
      Edit freely; \`lf done\` / \`lf bump\` / \`lf loop\` keep the format. Closed loops go to the ticket's ## Log. -->
 `;
 
