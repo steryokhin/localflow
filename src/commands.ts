@@ -23,7 +23,7 @@ import { UserError, cloudSyncedMarker, expandHome, nowStamp, readTextIfExists, s
 import { dumpFrontmatter, parseFrontmatter, setFrontmatterKeys } from "./vault/frontmatter.ts";
 import { EMPTY_TREE, assertLocalOnly, commitAll, commitPaths, git, gitInteractive, head, initRepo, isRepo, remotes } from "./vault/git.ts";
 import { linkFolder, unlinkFolder } from "./vault/links.ts";
-import { ME, addLoop, bumpLoop, closeLoop, readLoops, syncLoops } from "./vault/loops.ts";
+import { ME, addLoop, bumpLoop, closeLoop, parseWhen, readLoops, syncLoops } from "./vault/loops.ts";
 import type { Loop } from "./vault/loops.ts";
 import { appendTicketLog, setTracked } from "./vault/notes.ts";
 import { beginWork, repoOf, setRepo } from "./vault/scaffold.ts";
@@ -31,6 +31,7 @@ import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import type { State, UnreadEvent } from "./vault/state.ts";
 import { SMART_GROUPS, inSmartGroup, waitingByKey } from "./vault/smart.ts";
+import { alignTickets, jiraLocalStatus, statusMismatch } from "./vault/align.ts";
 import type { SmartGroup } from "./vault/smart.ts";
 import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
 import type { Ticket } from "./vault/store.ts";
@@ -263,32 +264,37 @@ function wrap(text: string, width: number): string[] {
 
 export function cmdLs(
   vault: string,
-  opts: { status?: string; mine?: boolean; project?: string; unread?: boolean; all?: boolean },
+  opts: { status?: string; mine?: boolean; project?: string; unread?: boolean; all?: boolean; by?: string },
 ): void {
+  const by = opts.by ?? "local";
+  if (by !== "local" && by !== "jira") throw new UserError("--by is jira or local.");
   const config = loadConfig(vault);
   const unread = unreadByTicket(vault, loadState(vault));
+  // --by jira: tickets sit under Jira's status in local terms (what `lf align` would set).
+  const statusOf = (t: Ticket): string => (by === "jira" ? (jiraLocalStatus(t, config) ?? t.status) : t.status);
   let tickets = listTickets(vault);
   if (opts.project) tickets = tickets.filter((t) => t.project === opts.project);
   if (opts.mine) tickets = tickets.filter((t) => t.source === "local" || t.fm.mine === true);
   if (opts.unread) tickets = tickets.filter((t) => unread.has(t.key));
-  if (opts.status) tickets = tickets.filter((t) => t.status === opts.status);
-  else if (!opts.all) tickets = tickets.filter((t) => t.status !== "done" && t.status !== "archived");
+  if (opts.status) tickets = tickets.filter((t) => statusOf(t) === opts.status);
+  else if (!opts.all) tickets = tickets.filter((t) => statusOf(t) !== "done" && statusOf(t) !== "archived");
   if (tickets.length === 0) {
     out("No tickets match.");
     return;
   }
   const keyWidth = Math.max(...tickets.map((t) => t.key.length));
   const jiraWidth = Math.max(...tickets.map((t) => String(t.fm.jira_status ?? "local").length));
-  const statuses = [...BOARD_ORDER, ...new Set(tickets.map((t) => t.status).filter((s) => !BOARD_ORDER.includes(s)))];
+  const statuses = [...BOARD_ORDER, ...new Set(tickets.map(statusOf).filter((s) => !BOARD_ORDER.includes(s)))];
+  if (by === "jira") out("(grouped by Jira status)");
   for (const status of statuses) {
-    const group = tickets.filter((t) => t.status === status);
+    const group = tickets.filter((t) => statusOf(t) === status);
     if (group.length === 0) continue;
     out(`${status} (${group.length})`);
     for (const t of group) {
-      const ahead = jiraAhead(t, config);
+      const mismatch = statusMismatch(t, config);
       const flags = [
         t.source === "jira" && t.fm.mine === false ? `[${t.fm.assignee}]` : "",
-        ahead ? `[Jira is ahead: ${ahead}]` : "",
+        mismatch ? `[≠ mine: ${t.status}, Jira: ${jiraLocalStatus(t, config)} — lf align ${t.key}]` : "",
       ].filter(Boolean).join(" ");
       out(
         `  ${unread.has(t.key) ? "●" : " "} ${t.key.padEnd(keyWidth)}  ${priorityOf(t).padEnd(2)}  ` +
@@ -296,6 +302,18 @@ export function cmdLs(
       );
     }
   }
+}
+
+/** Jira's status -> the user's status in notes.md (one direction only; nothing is written to Jira). */
+export function cmdAlign(vault: string, keys: string[], opts: { all?: boolean; dryRun?: boolean }): void {
+  if (!opts.all && !keys.length) throw new UserError("Usage: lf align KEY... | --all [--dry-run]");
+  const changes = alignTickets(vault, loadConfig(vault), opts.all ? "all" : keys, { dryRun: opts.dryRun });
+  if (!changes.length) {
+    out(opts.all ? "Nothing to align: every ticket agrees with Jira." : "Already aligned with Jira.");
+    return;
+  }
+  for (const c of changes) out(`${opts.dryRun ? "would set" : "set"} ${c.key}: ${c.from} → ${c.to}`);
+  if (opts.dryRun) out(`${changes.length} ticket${changes.length === 1 ? "" : "s"}; run without --dry-run to apply.`);
 }
 
 export function cmdStatus(vault: string, rawKey: string, status: string, extra: Record<string, string> = {}): void {
@@ -446,11 +464,27 @@ async function ask(question: string): Promise<string> {
   }
 }
 
-export async function cmdDone(vault: string, query: string, outcome: string): Promise<void> {
+export interface NextLoop {
+  text: string;
+  by?: string;
+  from?: string;
+  else?: string;
+}
+
+export async function cmdDone(vault: string, query: string, outcome: string, next?: NextLoop): Promise<void> {
   const now = new Date();
+  // The next loop is checked before the first one closes, so a typo cannot leave a gap.
+  if (next) {
+    if (!next.text.trim() || !next.by) throw new UserError('--next needs a text and --by WHEN: lf done L3 "outcome" --next "TEXT" --by +4h');
+    parseWhen(next.by, now, workdayEnd(vault));
+  }
   const { loop, loggedTo } = closeLoop(vault, query, outcome, now);
   refreshActions(vault, now);
   out(`closed ${loop.id}: ${loop.text} → ${loggedTo}`);
+  if (next) {
+    cmdLoop(vault, next.text, { key: loop.key ?? undefined, from: next.from, by: next.by, else: next.else });
+    return;
+  }
   // Closing a loop usually opens the next one; asked only when a person is at the terminal.
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     out(`Next step? lf loop "…" --by WHEN${loop.key ? ` --key ${loop.key}` : ""}`);

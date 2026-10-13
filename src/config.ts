@@ -62,6 +62,13 @@ export interface Config {
     textFormat: "wiki" | "markdown";
   };
   projects: Record<string, ProjectConfig>;
+  /**
+   * Smart folders in the web UI, over the built-ins (Activity, My Jira, Tracking, Waiting, No loops):
+   * an entry with a built-in's name replaces it (`"hidden": true` drops it), a new name is appended.
+   * Filter terms: mine, tracked, unread, hasLoops, waiting, jira, local, jira:<category|status>,
+   * local:<status>, project:<KEY>, joined with "and" / "or", each optionally prefixed with "not".
+   */
+  smartFolders?: Array<{ name: string; icon?: string; filter: string; hidden?: boolean }>;
   /** Open loops (`lf loop`, `lf watch`). Every key is optional. */
   loops?: {
     /** No notifications in this window, e.g. "20:00-08:00" (the default). */

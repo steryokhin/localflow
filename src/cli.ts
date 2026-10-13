@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import {
-  cmdBump, cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdDone, cmdInbox, cmdInit, cmdLink, cmdLog, cmdLoop, cmdLoops, cmdLs,
+  cmdAlign, cmdBump, cmdCommit, cmdCreate, cmdDiff, cmdDoctor, cmdDone, cmdInbox, cmdInit, cmdLink, cmdLog, cmdLoop, cmdLoops, cmdLs,
   cmdNote, cmdOpen, cmdPath, cmdImport, cmdRepo, cmdReport, cmdSeen, cmdServe, cmdStandup, cmdStart, cmdStatus, cmdSync, cmdTrack,
   cmdUnlink, cmdWatch,
 } from "./commands.ts";
@@ -33,7 +33,10 @@ What is new
   seen KEY... | --all             mark as read
 
 Work
-  ls [--status S] [--mine] [--project P] [--unread] [--all]
+  ls [--status S] [--mine] [--project P] [--unread] [--all] [--by jira|local]
+                                  --by jira groups by Jira's status (mapped to local terms)
+  align KEY... | --all [--dry-run]
+                                  copy Jira's status into yours (notes.md); never writes to Jira
   start KEY                       status -> inprogress, tracked; creates ai-summary.md and actions.md
   repo KEY [NAME]                 the ticket's repository: notes/repos/NAME.md, shared across tickets
   status KEY <inbox|inprogress|inreview|done|archived>
@@ -49,7 +52,9 @@ Work
 Open loops (what I am waiting for, until when, and what to do then — kept in loops.md)
   loop "TEXT" --by WHEN [--key KEY] [--from WHO] [--else "WHAT THEN"]
                                   WHEN: +4h, +30m, +2d, 18:00, eod, tomorrow, 2026-10-14, "2026-10-14 12:00"
-  done ID|WORD ["outcome"]        close a loop; it goes to the ticket's ## Log
+  done ID|WORD ["outcome"] [--next "TEXT" --by WHEN [--from WHO] [--else "WHAT THEN"]]
+                                  close a loop (it goes to the ticket's ## Log); --next opens the
+                                  following one on the same ticket in the same call
   bump ID|WORD --by WHEN          move a deadline (logged)
   log KEY "TEXT"                  a line in the ticket's ## Log, without a loop
   loops                           rebuild and print ACTIONS.md (expired first)
@@ -175,6 +180,7 @@ async function main(argv: string[]): Promise<number> {
         project: { type: "string" },
         unread: { type: "boolean" },
         all: { type: "boolean" },
+        by: { type: "string" },
       });
       cmdLs(resolveVault(values.vault as string | undefined), {
         status: values.status as string | undefined,
@@ -182,7 +188,14 @@ async function main(argv: string[]): Promise<number> {
         project: values.project as string | undefined,
         unread: values.unread as boolean | undefined,
         all: values.all as boolean | undefined,
+        by: values.by as string | undefined,
       });
+      return 0;
+    }
+
+    case "align": {
+      const { values, positionals } = parse(rest, { all: { type: "boolean" }, "dry-run": { type: "boolean" } });
+      cmdAlign(resolveVault(values.vault as string | undefined), positionals, { all: values.all as boolean | undefined, dryRun: values["dry-run"] as boolean | undefined });
       return 0;
     }
 
@@ -247,8 +260,14 @@ async function main(argv: string[]): Promise<number> {
     }
 
     case "done": {
-      const { values, positionals } = parse(rest, {});
-      await cmdDone(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf done ID|WORD ["outcome"]'), positionals.slice(1).join(" "));
+      const { values, positionals } = parse(rest, {
+        next: { type: "string" }, by: { type: "string" }, from: { type: "string" }, else: { type: "string" },
+      });
+      if (values.next === undefined && (values.by || values.from || values.else)) throw new UserError("--by / --from / --else go with --next \"TEXT\".");
+      const next = values.next === undefined ? undefined : {
+        text: values.next as string, by: values.by as string | undefined, from: values.from as string | undefined, else: values.else as string | undefined,
+      };
+      await cmdDone(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf done ID|WORD ["outcome"] [--next "TEXT" --by WHEN]'), positionals.slice(1).join(" "), next);
       return 0;
     }
 

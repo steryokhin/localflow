@@ -8,8 +8,9 @@ import path from "node:path";
 import { UserError } from "../util.ts";
 import { assertLocalOnly } from "../vault/git.ts";
 import {
-  createGroup, createNote, createTicketFile, deleteGroup, fileView, linkedFileView, markSeen, overview, rawFilePath, renderOne, saveFile,
-  setFrontmatter, setStatus, setTicketGroup, setTicketParent, syncTicket, ticketHistory, ticketView,
+  alignStatus, createGroup, createLoop, createNote, createTicketFile, deleteGroup, fileView, finishLoop, linkedFileView, loopBoard, loopInput,
+  markSeen, moveLoop, overview, rawFilePath, renderOne, saveFile, setFrontmatter, setStatus, setTicketGroup, setTicketParent, standupText,
+  syncTicket, ticketHistory, ticketView,
 } from "./api.ts";
 import type { SyncResult } from "./api.ts";
 import { linkFolder, unlinkFolder } from "../vault/links.ts";
@@ -244,6 +245,12 @@ function strOrNull(body: Record<string, unknown>, key: string): string | null {
   throw new HttpError(400, `"${key}" must be a string or null`);
 }
 
+function obj(body: Record<string, unknown>, key: string): Record<string, unknown> {
+  const v = body[key];
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new HttpError(400, `"${key}" must be an object`);
+  return v as Record<string, unknown>;
+}
+
 async function api(
   vault: string, method: string, url: URL, body: Record<string, unknown>, sync: (key: string) => Promise<SyncResult>,
 ): Promise<unknown> {
@@ -301,5 +308,20 @@ async function api(
   if (route === "POST /api/repo") return setRepo(vault, requireTicket(vault, str(body, "key")), str(body, "name"));
   if (route === "POST /api/sync") return sync(str(body, "key"));
   if (route === "POST /api/note") return { path: createNote(vault, str(body, "folder", false), str(body, "name")) };
+  if (route === "POST /api/align") {
+    const keys = body.keys;
+    if (keys !== "all" && !(Array.isArray(keys) && keys.every((k) => typeof k === "string"))) throw new HttpError(400, '"keys" must be a list of keys or "all"');
+    return { changes: alignStatus(vault, keys as string[] | "all", body.dryRun === true) };
+  }
+  if (route === "GET /api/loops") return loopBoard(vault);
+  if (route === "POST /api/loop") return createLoop(vault, loopInput(body));
+  if (route === "POST /api/loop/done") {
+    // "next": a loop, or null when the user explicitly skipped it. Leaving it out is an error.
+    if (!("next" in body)) throw new HttpError(400, 'Missing "next": the next loop, or null to skip it');
+    const next = body.next === null ? null : loopInput(obj(body, "next"));
+    return finishLoop(vault, str(body, "id"), str(body, "outcome", false), next);
+  }
+  if (route === "POST /api/loop/bump") return moveLoop(vault, str(body, "id"), str(body, "by"));
+  if (route === "GET /api/standup") return { text: standupText(vault, url.searchParams.get("week") === "1") };
   throw new HttpError(404, `No such API: ${route}`);
 }

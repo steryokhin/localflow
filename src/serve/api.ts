@@ -24,10 +24,15 @@ import type { Ticket } from "../vault/store.ts";
 import { LINKED_KEY, readLinkedFile, readLinkedFolders } from "../vault/links.ts";
 import type { LinkedFolder } from "../vault/links.ts";
 import { beginWork, repoOf } from "../vault/scaffold.ts";
-import { readLoops } from "../vault/loops.ts";
+import { ME, addLoop, bumpLoop, closeLoop, dueAt, parseWhen, readLoops, syncLoops } from "../vault/loops.ts";
 import type { Loop } from "../vault/loops.ts";
-import { isTracked } from "../vault/notes.ts";
-import { waitingByKey } from "../vault/smart.ts";
+import { isTracked, readLog } from "../vault/notes.ts";
+import type { LogLine } from "../vault/notes.ts";
+import { loopsByKey, smartFolders } from "../vault/smart.ts";
+import { alignTickets, jiraLocalStatus, statusMismatch } from "../vault/align.ts";
+import type { AlignChange } from "../vault/align.ts";
+import { bucket, fmtDue, renderStandup } from "../render/loops.ts";
+import { refreshActions } from "../watch.ts";
 
 export const NOTES_DIR = "notes";
 /** Vault-root file with the groups the user created by hand (so empty groups can exist). */
@@ -91,6 +96,12 @@ export interface TicketRow {
   tracked: boolean;
   /** Open loops waiting on someone else: "Tom: PR review · by 18:00". */
   waiting: string[];
+  /** Jira's status in local terms (what "align" would set); null for local tickets. */
+  jiraLocal: string | null;
+  /** Jira's status and the user's disagree. */
+  mismatch: boolean;
+  /** Open loops of the ticket, any owner. */
+  loops: number;
 }
 
 export interface GroupInfo {
@@ -119,9 +130,24 @@ export interface Overview {
   groups: GroupInfo[];
   /** The Sync button makes sense: REST transport and at least one Jira project. */
   canSync: boolean;
+  /** Smart folders over the whole vault (never scoped to a group). */
+  smartFolders: SmartFolderView[];
+  /** Open loops past their deadline, and due later today. */
+  loopCounts: { expired: number; today: number };
 }
 
-function row(t: Ticket, config: Config, unread: number, change: Change[] = [], waiting: Loop[] = []): TicketRow {
+export interface SmartFolderView {
+  id: string;
+  name: string;
+  icon: string;
+  filter: string;
+  error?: string;
+  keys: string[];
+  unread: number;
+}
+
+function row(t: Ticket, config: Config, unread: number, change: Change[] = [], loops: Loop[] = []): TicketRow {
+  const waiting = loops.filter((l) => l.owner !== ME);
   const now = new Date();
   return {
     key: t.key,
@@ -143,6 +169,9 @@ function row(t: Ticket, config: Config, unread: number, change: Change[] = [], w
     change: change.length ? changeLine(byImportance(change)[0]) + (change.length > 1 ? ` · +${change.length - 1} more` : "") : null,
     tracked: isTracked(t),
     waiting: waiting.map((l) => waitingLine(l, now)),
+    jiraLocal: jiraLocalStatus(t, config),
+    mismatch: statusMismatch(t, config),
+    loops: loops.length,
   };
 }
 
@@ -179,8 +208,22 @@ export function overview(vault: string): Overview {
   const unread = unreadByTicket(vault, state);
   const all = listTickets(vault);
   const changes = unreadChanges(vault, all, unread.keys(), config, state);
-  const waiting = waitingByKey(readLoops(vault));
-  const tickets = all.map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0, changes.get(t.key), waiting.get(t.key)) }));
+  const openLoops = readLoops(vault);
+  const byKey = loopsByKey(openLoops);
+  const tickets = all.map((t) => ({ t, row: row(t, config, unread.get(t.key)?.length ?? 0, changes.get(t.key), byKey.get(t.key)) }));
+  const folders = smartFolders(config.smartFolders).map((f) => {
+    const hits = tickets.filter((x) => f.test(x.t, { unread: x.row.unread > 0, loops: byKey.get(x.t.key) ?? [] }));
+    return {
+      id: f.id,
+      name: f.name,
+      icon: f.icon,
+      filter: f.filter,
+      ...(f.error ? { error: f.error } : {}),
+      keys: hits.map((x) => x.t.key),
+      unread: hits.filter((x) => x.row.unread > 0).length,
+    };
+  });
+  const b = bucket(openLoops, new Date());
   return {
     vault,
     lastSync: state.lastSync,
@@ -190,6 +233,8 @@ export function overview(vault: string): Overview {
     localPrefixes: Object.entries(config.projects).filter(([, p]) => p.source === "local").map(([name]) => name),
     groups: groupList(vault, tickets),
     canSync: config.jira.transport === "rest" && Object.values(config.projects).some((p) => p.source === "jira"),
+    smartFolders: folders,
+    loopCounts: { expired: b.expired.length, today: b.today.length },
   };
 }
 
@@ -351,6 +396,10 @@ export interface TicketView {
   /** What changed since the "seen" mark, when something is unread. */
   changes: Change[];
   seenDate: string | null;
+  /** The ticket's open loops, earliest deadline first. */
+  loops: LoopView[];
+  /** The last lines of `## Log` in notes.md, oldest first. */
+  log: LogLine[];
 }
 
 function ticketUrlResolver(rel: string): (url: string) => string {
@@ -397,8 +446,11 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     .sort((a, b) => (a === NOTES_FILE ? -1 : b === NOTES_FILE ? 1 : a.localeCompare(b)));
   const seenCommit = seenSha ? log(vault).find((c) => c.sha === seenSha) : undefined;
   const changes = unread.length ? ticketChanges(vault, t, seenSha ?? null, { config, state }).items : [];
+  const now = new Date();
+  const loops = loopsByKey(readLoops(vault)).get(t.key) ?? [];
+  const b = bucket(loops, now);
   return {
-    row: row(t, config, unread.length, changes, waitingByKey(readLoops(vault)).get(t.key)),
+    row: row(t, config, unread.length, changes, loops),
     rel: t.rel,
     fm: t.fm,
     notes: t.notes,
@@ -409,6 +461,8 @@ export function ticketView(vault: string, rawKey: string): TicketView {
     unread,
     changes,
     seenDate: seenCommit?.date ?? null,
+    loops: [...b.expired, ...b.today, ...b.mine, ...b.waiting].map((l) => loopView(l, now)),
+    log: readLog(readTextIfExists(path.join(t.dir, NOTES_FILE)) ?? "").slice(-LOG_TAIL),
   };
 }
 
@@ -557,6 +611,111 @@ export function rawFilePath(vault: string, rawRel: string): string | null {
   const abs = path.join(vault, rel);
   if (!abs.startsWith(vault + path.sep)) return null;
   return fs.existsSync(abs) && fs.statSync(abs).isFile() ? abs : null;
+}
+
+// ---------- statuses ----------
+
+/** "align": Jira's status -> the user's, for the given tickets or all that disagree. Never writes to Jira. */
+export function alignStatus(vault: string, keys: string[] | "all", dryRun = false): AlignChange[] {
+  if (keys !== "all" && !keys.length) throw new UserError("Which tickets? Give keys or all.");
+  return alignTickets(vault, loadConfig(vault), keys, { dryRun });
+}
+
+// ---------- open loops ----------
+
+/** Lines of `## Log` shown under a ticket's loops. */
+export const LOG_TAIL = 8;
+
+export interface LoopView extends Loop {
+  /** Ticket title, when the loop has a ticket that exists. */
+  title: string | null;
+  /** "18:00", "13 Oct 12:00", "today". */
+  dueLabel: string;
+  expired: boolean;
+}
+
+function loopView(l: Loop, now: Date, titles?: Map<string, string>): LoopView {
+  const at = dueAt(l.due);
+  return { ...l, title: l.key ? (titles?.get(l.key) ?? null) : null, dueLabel: fmtDue(l.due, now), expired: !!at && at <= now };
+}
+
+export interface LoopBoard {
+  expired: LoopView[];
+  today: LoopView[];
+  mine: LoopView[];
+  waiting: LoopView[];
+}
+
+/** The ACTIONS.md board as data. Numbers hand-written lines in loops.md and rewrites ACTIONS.md. */
+export function loopBoard(vault: string): LoopBoard {
+  const now = new Date();
+  const loops = refreshActions(vault, now);
+  const titles = new Map(listTickets(vault).map((t) => [t.key, t.title]));
+  const b = bucket(loops, now);
+  const v = (ls: Loop[]): LoopView[] => ls.map((l) => loopView(l, now, titles));
+  return { expired: v(b.expired), today: v(b.today), mine: v(b.mine), waiting: v(b.waiting) };
+}
+
+const workdayEnd = (vault: string): string | undefined => loadConfig(vault).loops?.workdayEnd;
+
+export interface LoopInput {
+  text: string;
+  key?: string;
+  from?: string;
+  by: string;
+  else?: string;
+}
+
+function optStr(body: Record<string, unknown>, name: string): string | undefined {
+  const v = body[name];
+  if (v === undefined || v === null || v === "") return undefined;
+  if (typeof v !== "string") throw new UserError(`"${name}" must be a string.`);
+  return v;
+}
+
+/** A loop from a request body: text and by are required, the rest optional. */
+export function loopInput(body: Record<string, unknown>): LoopInput {
+  const text = optStr(body, "text")?.trim();
+  const by = optStr(body, "by")?.trim();
+  if (!text) throw new UserError("What is the loop about? (text)");
+  if (!by) throw new UserError("Every loop needs a deadline: +4h, 18:00, eod, tomorrow, 2026-10-14.");
+  return { text, by, key: optStr(body, "key"), from: optStr(body, "from"), else: optStr(body, "else") };
+}
+
+export function createLoop(vault: string, input: LoopInput): Loop {
+  const now = new Date();
+  const loop = addLoop(vault, { text: input.text, key: input.key, owner: input.from, by: input.by, onExpiry: input.else }, now, workdayEnd(vault));
+  refreshActions(vault, now);
+  return loop;
+}
+
+/**
+ * Closes a loop and, in the same call, opens the next one. `next` is null only when the user
+ * chose to skip it explicitly. The next loop is checked before anything is written, so a bad
+ * deadline does not leave the first loop closed with no follow-up.
+ */
+export function finishLoop(vault: string, id: string, outcome: string, next: LoopInput | null): { closed: Loop; loggedTo: string; next: Loop | null } {
+  const now = new Date();
+  // Throws with the accepted forms when the deadline is unreadable.
+  if (next) parseWhen(next.by, now, workdayEnd(vault));
+  const { loop, loggedTo } = closeLoop(vault, id, outcome, now);
+  const opened = next
+    ? addLoop(vault, { text: next.text, key: next.key ?? loop.key ?? undefined, owner: next.from, by: next.by, onExpiry: next.else }, now, workdayEnd(vault))
+    : null;
+  refreshActions(vault, now);
+  return { closed: loop, loggedTo, next: opened };
+}
+
+export function moveLoop(vault: string, id: string, by: string): { loop: Loop; was: string } {
+  const now = new Date();
+  const r = bumpLoop(vault, id, by, now, workdayEnd(vault));
+  refreshActions(vault, now);
+  return r;
+}
+
+/** Exactly what `lf standup [--week]` prints. */
+export function standupText(vault: string, week: boolean): string {
+  return renderStandup(vault, syncLoops(vault), listTickets(vault), new Date(), week);
 }
 
 // ---------- sync ----------
