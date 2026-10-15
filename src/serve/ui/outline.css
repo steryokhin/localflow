@@ -19,12 +19,12 @@
 .ol-scroll { flex: 1; overflow: auto; min-width: 0; }
 /* The page's text size: --k scales every size of the tree (A− / A+ in the bar). */
 .ol-page { --k: 1; }
-.ol-crumbs { margin: 16px 0 0; padding: 0 24px 0 calc(76px * var(--k)); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: calc(12.5px * var(--k)); color: var(--faint); }
+.ol-crumbs { margin: 16px 0 0; padding: 0 24px 0 calc(96px * var(--k)); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: calc(12.5px * var(--k)); color: var(--faint); }
 .ol-crumbs button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; }
 .ol-crumbs button:hover { background: var(--sunk); color: var(--text); }
-.ol-body { padding: 14px 24px 30px calc(76px * var(--k)); outline: none; }
+.ol-body { padding: 14px 24px 30px calc(96px * var(--k)); outline: none; }
 .ol-body.selecting, .ol-body.selecting * { user-select: none; -webkit-user-select: none; cursor: default; }
-.ol-foot { margin: 0 0 80px; padding: 0 24px 0 calc(76px * var(--k)); }
+.ol-foot { margin: 0 0 80px; padding: 0 24px 0 calc(96px * var(--k)); }
 .ol-add { border: 0; background: none; color: var(--faint); padding: 6px 4px; font-size: 13px; }
 .ol-add:hover { color: var(--accent); }
 .ol-secform { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--faint); }
@@ -37,23 +37,6 @@
 .ol-size button:hover { background: var(--sunk); color: var(--text); }
 .ol-size [data-fs="0"] { font-variant-numeric: tabular-nums; min-width: 38px; }
 
-/* ---------- section heads ---------- */
-.ol-head { display: flex; align-items: center; gap: calc(8px * var(--k)); margin: calc(26px * var(--k)) 0 calc(6px * var(--k)) calc(-28px * var(--k)); padding: 2px 0; position: relative; }
-.ol-head:first-child { margin-top: 4px; }
-.ol-head .ol-key { font-size: calc(12px * var(--k)); font-weight: 650; color: var(--muted); background: var(--sunk); border-radius: 5px; padding: 2px 6px; text-decoration: none; font-variant-numeric: tabular-nums; }
-.ol-head .ol-key:hover { color: var(--accent); }
-.ol-htitle { font-size: calc(19px * var(--k)); font-weight: 650; letter-spacing: -.01em; outline: none; border-radius: 4px; padding: 0 2px; min-width: 40px; }
-.ol-htitle:focus { background: var(--sunk); }
-.ol-head.closed .ol-htitle { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--line-strong); }
-.ol-st { font-size: calc(11px * var(--k)); color: var(--muted); background: var(--sunk); padding: 1px 7px; border-radius: 10px; }
-.ol-st.inprogress { color: var(--js-prog); background: var(--js-prog-bg); }
-.ol-st.inreview { color: var(--warn); background: var(--warn-bg); }
-.ol-st.done { color: var(--js-done); background: var(--js-done-bg); }
-.ol-hacts { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
-.ol-head:hover .ol-hacts, .ol-head:focus-within .ol-hacts { opacity: 1; }
-.ol-hacts button { border: 0; background: none; color: var(--faint); width: calc(26px * var(--k)); height: calc(26px * var(--k)); border-radius: 5px; font-size: calc(14px * var(--k)); }
-.ol-hacts button:hover { background: var(--sunk); color: var(--text); }
-
 /* ---------- rows ---------- */
 .ol-row { --ind: calc(26px * var(--k)); position: relative; display: flex; align-items: flex-start; gap: 4px; padding: 1px 0 1px calc(var(--d, 0) * var(--ind)); border-radius: 6px; min-height: calc(30px * var(--k)); }
 /* One faint guide line per level, under the parent's checkbox. */
@@ -64,10 +47,13 @@
 .ol-row.sel, .ol-row.sel:hover { background: var(--accent-soft); }
 .ol-row.dragging { opacity: .35; }
 .ol-row.sel[draggable="true"] { cursor: grab; }
-.ol-grip { position: absolute; left: calc(var(--d, 0) * var(--ind) - 50px * var(--k)); top: calc(5px * var(--k)); width: calc(20px * var(--k)); height: calc(22px * var(--k)); font-size: calc(12px * var(--k)); letter-spacing: -2px; color: var(--faint);
-  display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: grab; opacity: 0; user-select: none; }
-.ol-row:hover .ol-grip, .ol-row.sel .ol-grip { opacity: 1; }
-.ol-grip:hover { background: var(--sunk); color: var(--text); }
+/* The handle on the left, as in Notion: + adds an item below, ⋮⋮ drags it or opens its menu. */
+.ol-handle { position: absolute; left: calc(var(--d, 0) * var(--ind) - 84px * var(--k)); top: calc(2px * var(--k)); display: flex; gap: 2px; opacity: 0; transition: opacity .1s; }
+.ol-row:hover .ol-handle, .ol-row.sel .ol-handle, .ol-row.editing .ol-handle { opacity: 1; }
+.ol-plus, .ol-grip { width: calc(26px * var(--k)); height: calc(28px * var(--k)); border-radius: 6px; color: var(--muted); display: flex; align-items: center; justify-content: center; user-select: none; }
+.ol-plus { border: 0; background: none; padding: 0; font-size: calc(22px * var(--k)); font-weight: 300; line-height: 1; }
+.ol-grip { font-size: calc(19px * var(--k)); line-height: 1; cursor: grab; }
+.ol-plus:hover, .ol-grip:hover { background: var(--sunk); color: var(--text); }
 /* The fold arrow: as big as the text, always visible on items that have something inside. */
 .ol-fold { flex: none; width: calc(24px * var(--k)); height: calc(30px * var(--k)); border: 0; background: none; color: var(--muted); font-size: calc(14px * var(--k)); line-height: 1; padding: 0;
   margin-left: calc(-28px * var(--k)); border-radius: 5px; transition: transform .12s, opacity .12s, color .12s; opacity: .55; }
@@ -76,8 +62,6 @@
 .ol-fold.folded { transform: rotate(-90deg); color: var(--accent); }
 .ol-fold svg { display: block; width: calc(16px * var(--k)); height: calc(16px * var(--k)); margin: auto; }
 .ol-fold.none { visibility: hidden; }
-.ol-head .ol-fold { margin: 0; height: calc(26px * var(--k)); opacity: .7; }
-.ol-head:hover .ol-fold { opacity: 1; }
 .ol-box { flex: none; width: calc(17px * var(--k)); height: calc(17px * var(--k)); margin: calc(6px * var(--k)) calc(7px * var(--k)) 0 0; border: 1.6px solid var(--line-strong); border-radius: 5px; background: var(--raise); padding: 0; position: relative; transition: background .1s, border-color .1s; }
 .ol-box:hover { border-color: var(--accent); }
 .ol-box.on { background: var(--accent); border-color: var(--accent); }
@@ -93,7 +77,17 @@
 .ol-row.note .ol-text { color: var(--text); }
 .ol-row.ol-title { padding-left: 0; margin-bottom: 8px; }
 .ol-row.ol-title .ol-text { font-size: calc(22px * var(--k)); font-weight: 650; letter-spacing: -.01em; }
-.ol-row.ol-title .ol-grip, .ol-row.ol-title .ol-fold { display: none; }
+.ol-row.ol-title .ol-handle, .ol-row.ol-title .ol-fold { display: none; }
+
+/* A ticket: a bolder line with its key and status; closed ones are struck through like done items. */
+.ol-row.ticket .ol-text { font-weight: 650; font-size: calc(16.5px * var(--k)); }
+.ol-row.ticket[style*="--d:0"]:not(:first-child) { margin-top: calc(14px * var(--k)); }
+.ol-bul.tk { color: var(--accent); font-size: calc(13px * var(--k)); }
+.ol-chip.key { color: var(--muted); font-weight: 650; text-decoration: none; font-variant-numeric: tabular-nums; }
+.ol-chip.key:hover { color: var(--accent); }
+.ol-chip.st.inprogress { color: var(--js-prog); background: var(--js-prog-bg); }
+.ol-chip.st.inreview { color: var(--warn); background: var(--warn-bg); }
+.ol-chip.st.done { color: var(--js-done); background: var(--js-done-bg); }
 
 .ol-chips { display: inline-flex; gap: 5px; flex-wrap: wrap; align-items: center; }
 .ol-chip { display: inline-flex; align-items: center; height: calc(20px * var(--k)); padding: 0 calc(7px * var(--k)); border-radius: 10px; font-size: calc(11.5px * var(--k)); font-weight: 500; white-space: nowrap; color: var(--muted); background: var(--sunk); border: 0; }
@@ -139,7 +133,7 @@
 /* ---------- a past day (read only) ---------- */
 .ol-banner { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin: 0 0 14px; padding: 9px 12px; border-radius: 8px; background: var(--new-soft); color: var(--text); font-size: 13px; }
 .ol-snap .ol-text { cursor: default; }
-.ol-snap .ol-grip, .ol-snap .ol-hacts { display: none; }
+.ol-snap .ol-handle { display: none; }
 .ol-row.mark-added { box-shadow: inset 3px 0 0 var(--js-done); background: color-mix(in srgb, var(--js-done-bg) 70%, transparent); }
 .ol-row.mark-checked { box-shadow: inset 3px 0 0 var(--accent); }
 .ol-row.mark-edited, .ol-row.mark-note { box-shadow: inset 3px 0 0 var(--new); }

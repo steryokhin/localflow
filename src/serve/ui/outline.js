@@ -137,13 +137,14 @@
       this.toast = deps.toast;
       this.go = deps.go;
       this.view = null;          // last server view
-      this.sections = [];        // client model (sections with item trees)
-      this.idx = new Map();      // id -> { node, parent, sec }
+      this.items = [];           // client model: the top-level items with their trees
+      this.idx = new Map();      // id -> { node, parent }
       this.lens = read(LENS_KEY, "all");
       this.query = "";
       this.folded = new Set(read(FOLDED_KEY, []));
       this.ctxOpen = new Set(read(CTX_OPEN_KEY, []));
-      this.hoist = read(HOIST_KEY, null); // item id or section ref ("s:REF")
+      this.hoist = read(HOIST_KEY, null); // id of the item shown as its own page
+      if (typeof this.hoist === "string" && this.hoist.startsWith("s:")) this.hoist = null; // from before one tree
       this.size = SIZES.includes(read(SIZE_KEY, DEFAULT_SIZE)) ? read(SIZE_KEY, DEFAULT_SIZE) : DEFAULT_SIZE;
       this.focus = null;         // { id, offset }
       this.drafts = new Map();   // id -> text typed and not saved yet
@@ -158,9 +159,9 @@
       this.sticky = new Set();   // ids kept visible in a lens because they were just made or edited here
       this.flash = new Map();    // id -> "new" | "changed": changes from outside, highlighted for a while
       this.history = null;       // { mode: "item" | "key" | "days" | "day", ... } of the open history panel
-      this.snapshot = null;      // { day, sections, events } when viewing a past day (read-only)
+      this.snapshot = null;      // { day, items, events } when viewing a past day (read-only)
       this.menu = null;          // id of the row whose menu is open
-      this.addingSection = false;
+      this.addingTicket = false;
       this.drag = null;
       this.destroyed = false;
       this.status = "";
@@ -193,7 +194,7 @@
       const a = document.activeElement;
       const typingHere = a && this.root.contains(a) && (a.classList.contains("ol-htitle") || a.classList.contains("ol-ctxedit") || a.closest(".ol-secform"));
       return this.destroyed || this.inflight || this.queue.length || this.drafts.size || this.drag ||
-        (this.ctxEdit !== null && this.ctxEdit !== undefined) || this.addingSection || this.menu || typingHere;
+        (this.ctxEdit !== null && this.ctxEdit !== undefined) || this.addingTicket || this.menu || typingHere;
     }
 
     async refresh() {
@@ -212,7 +213,7 @@
       if (opts.external && this.view) {
         const before = new Map();
         const walk = (items) => { for (const it of items) { before.set(it.id, it.own); walk(it.children); } };
-        for (const s of this.view.sections) walk(s.items);
+        walk(this.view.items);
         let n = 0;
         const mark = (items) => {
           for (const it of items) {
@@ -221,7 +222,7 @@
             mark(it.children);
           }
         };
-        for (const s of v.sections) mark(s.items);
+        mark(v.items);
         if (n) {
           this.say(`${n} change${n === 1 ? "" : "s"} from outside`, "ext");
           clearTimeout(this.flashTimer);
@@ -229,7 +230,7 @@
         }
       }
       this.view = v;
-      this.sections = JSON.parse(JSON.stringify(v.sections));
+      this.items = JSON.parse(JSON.stringify(v.items));
       this.reindex();
       this.render();
       if (opts.initial && this.hoist && !this.hoistTarget()) { this.hoist = null; write(HOIST_KEY, null); this.render(); }
@@ -237,20 +238,18 @@
 
     reindex() {
       this.idx = new Map();
-      for (const sec of this.sections) {
-        const walk = (items, parent) => {
-          for (const node of items) {
-            this.idx.set(node.id, { node, parent, sec });
-            walk(node.children, node);
-          }
-        };
-        walk(sec.items, null);
-      }
+      const walk = (items, parent) => {
+        for (const node of items) {
+          this.idx.set(node.id, { node, parent });
+          walk(node.children, node);
+        }
+      };
+      walk(this.items, null);
     }
 
     siblingsOf(id) {
       const e = this.idx.get(id);
-      return e.parent ? e.parent.children : e.sec.items;
+      return e.parent ? e.parent.children : this.items;
     }
 
     depthOf(id) {
@@ -267,7 +266,10 @@
         const e = op.id ? this.idx.get(op.id) : null;
         switch (op.op) {
           case "text": if (e) e.node.text = op.text; break;
-          case "check": if (e) e.node.check = op.check; break;
+          case "check":
+            if (e && e.node.ticket) e.node.ticket.closed = op.check === "x";
+            else if (e) e.node.check = op.check;
+            break;
           case "context": if (e) e.node.context = op.context; break;
           case "insert": {
             const node = this.treeNode(op.item);
@@ -303,15 +305,11 @@
     resolvePlace(p) {
       if (p.after) {
         const e = this.idx.get(p.after);
-        const list = e.parent ? e.parent.children : e.sec.items;
+        const list = e.parent ? e.parent.children : this.items;
         return { list, index: list.indexOf(e.node) + 1 };
       }
-      if (p.parent) {
-        const list = this.idx.get(p.parent).node.children;
-        return { list, index: p.index === undefined ? list.length : Math.min(p.index, list.length) };
-      }
-      const sec = this.sections.find((s) => s.ref === p.section);
-      return { list: sec.items, index: p.index === undefined ? sec.items.length : Math.min(p.index, sec.items.length) };
+      const list = p.parent ? this.idx.get(p.parent).node.children : this.items;
+      return { list, index: p.index === undefined ? list.length : Math.min(p.index, list.length) };
     }
 
     /** A user action: applied now, sent in order, undoable. */
@@ -349,7 +347,7 @@
         if (remap.length) this.remapIds(Object.fromEntries(remap));
         if (!this.queue.length && !this.drafts.size) {
           this.view = r.view;
-          this.sections = JSON.parse(JSON.stringify(r.view.sections));
+          this.items = JSON.parse(JSON.stringify(r.view.items));
           this.reindex();
           this.render();
         } else {
@@ -382,8 +380,7 @@
         }
         return null;
       };
-      for (const s of this.view.sections) { const r = find(s.items); if (r) return r; }
-      return null;
+      return find(this.view.items);
     }
 
     remapIds(map) {
@@ -464,7 +461,7 @@
       const e = this.idx.get(id);
       const list = this.siblingsOf(id);
       const i = list.indexOf(e.node);
-      return e.parent ? { parent: e.parent.id, index: i } : { parent: null, section: e.sec.ref, index: i };
+      return { parent: e.parent ? e.parent.id : null, index: i };
     }
 
     snapshotOf(node) {
@@ -528,30 +525,24 @@
         const e = this.idx.get(id);
         const list = this.siblingsOf(id);
         const i = list.indexOf(e.node);
+        const at = (parent, index) => ({ parent: parent ? parent.id : null, index });
         if (dir < 0) {
-          if (i > 0) return e.parent ? { parent: e.parent.id, index: i - 1 } : { parent: null, section: e.sec.ref, index: i - 1 };
-          if (e.parent) {
-            const pe = this.idx.get(e.parent.id);
-            const plist = this.siblingsOf(e.parent.id);
-            const pi = plist.indexOf(e.parent);
-            if (pi > 0) { const into = plist[pi - 1]; this.folded.delete(into.id); return { parent: into.id }; }
-            return pe.parent ? { parent: pe.parent.id, index: pi } : { parent: null, section: pe.sec.ref, index: pi };
-          }
-          const si = this.sections.indexOf(e.sec);
-          if (si > 0) return { parent: null, section: this.sections[si - 1].ref };
-          return null;
-        }
-        if (i < list.length - 1) return e.parent ? { parent: e.parent.id, index: i + 1 } : { parent: null, section: e.sec.ref, index: i + 1 };
-        if (e.parent) {
+          if (i > 0) return at(e.parent, i - 1);
+          if (!e.parent) return null;
+          // At the top of its parent: into the parent's previous sibling (at the end), else out above the parent.
           const pe = this.idx.get(e.parent.id);
           const plist = this.siblingsOf(e.parent.id);
           const pi = plist.indexOf(e.parent);
-          if (pi < plist.length - 1) { const into = plist[pi + 1]; this.folded.delete(into.id); return { parent: into.id, index: 0 }; }
-          return pe.parent ? { parent: pe.parent.id, index: pi + 1 } : { parent: null, section: pe.sec.ref, index: pi + 1 };
+          if (pi > 0) { const into = plist[pi - 1]; this.folded.delete(into.id); return { parent: into.id }; }
+          return at(pe.parent, pi);
         }
-        const si = this.sections.indexOf(e.sec);
-        if (si < this.sections.length - 1) return { parent: null, section: this.sections[si + 1].ref, index: 0 };
-        return null;
+        if (i < list.length - 1) return at(e.parent, i + 1);
+        if (!e.parent) return null;
+        const pe = this.idx.get(e.parent.id);
+        const plist = this.siblingsOf(e.parent.id);
+        const pi = plist.indexOf(e.parent);
+        if (pi < plist.length - 1) { const into = plist[pi + 1]; this.folded.delete(into.id); return { parent: into.id, index: 0 }; }
+        return at(pe.parent, pi + 1);
       });
     }
 
@@ -580,6 +571,12 @@
       const inverse = [];
       for (const id of ids) {
         const n = this.idx.get(id).node;
+        if (n.ticket) {
+          // A ticket stays a bullet: the check closes or reopens it.
+          ops.push({ op: "check", id, check: n.ticket.closed ? " " : "x" });
+          inverse.unshift({ op: "check", id, check: n.ticket.closed ? "x" : " " });
+          continue;
+        }
         const next = n.check === "x" ? " " : n.check === " " ? "x" : " ";
         ops.push({ op: "check", id, check: next });
         inverse.unshift({ op: "check", id, check: n.check });
@@ -597,12 +594,8 @@
 
     hoistTarget() {
       if (!this.hoist) return null;
-      if (this.hoist.startsWith("s:")) {
-        const sec = this.sections.find((s) => s.ref === this.hoist.slice(2));
-        return sec ? { sec } : null;
-      }
       const e = this.idx.get(this.hoist);
-      return e ? { item: e.node, sec: e.sec } : null;
+      return e ? { item: e.node } : null;
     }
 
     lensMatch(node) {
@@ -626,19 +619,16 @@
       const q = this.query.trim().toLowerCase();
       if (this.lens === "all" && !q) return null;
       const show = new Set();
-      for (const sec of this.sections) {
-        if (this.lens === "active" && sec.closed) continue;
-        const walk = (items, chain, doneAbove) => {
-          for (const n of items) {
-            const done = doneAbove || n.check === "x";
-            const lensOk = this.lens === "active" ? !done : this.lensMatch(n);
-            const textOk = !q || `${n.text}\n${n.context.join("\n")}`.toLowerCase().includes(q);
-            if ((lensOk && textOk) || this.sticky.has(n.id)) { show.add(n.id); for (const c of chain) show.add(c); }
-            walk(n.children, [...chain, n.id], done);
-          }
-        };
-        walk(sec.items, [], false);
-      }
+      const walk = (items, chain, doneAbove) => {
+        for (const n of items) {
+          const done = doneAbove || isDone(n);
+          const lensOk = this.lens === "active" ? !done : this.lensMatch(n);
+          const textOk = !q || `${n.text}\n${n.context.join("\n")}`.toLowerCase().includes(q);
+          if ((lensOk && textOk) || this.sticky.has(n.id)) { show.add(n.id); for (const c of chain) show.add(c); }
+          walk(n.children, [...chain, n.id], done);
+        }
+      };
+      walk(this.items, [], false);
       return show;
     }
 
@@ -651,47 +641,34 @@
         if (lens === "all") continue;
         this.lens = lens;
         let n = 0;
-        for (const sec of this.sections) {
-          if (lens === "active" && sec.closed) continue;
-          const walk = (items, doneAbove) => {
-            for (const it of items) {
-              const done = doneAbove || it.check === "x";
-              if (lens === "active" ? !done && it.check === " " : this.lensMatch(it)) n++;
-              walk(it.children, done);
-            }
-          };
-          walk(sec.items, false);
-        }
+        const walk = (items, doneAbove) => {
+          for (const it of items) {
+            const done = doneAbove || isDone(it);
+            if (lens === "active" ? !done && it.check === " " : this.lensMatch(it)) n++;
+            walk(it.children, done);
+          }
+        };
+        walk(this.items, false);
         out[lens] = n;
       }
       [this.lens, this.query, this.sticky] = save;
       return out;
     }
 
-    /** Rows in display order: { node, depth, sec } plus section heads, honouring folds, hoist and lens. */
+    /** Rows in display order: { node, depth }, honouring folds, the focused branch and the lens. */
     rows() {
       const vis = this.visible();
       const out = [];
       const target = this.hoistTarget();
-      const walk = (items, depth, sec) => {
+      const walk = (items, depth) => {
         for (const node of items) {
           if (vis && !vis.has(node.id)) continue;
-          out.push({ node, depth, sec });
+          out.push({ node, depth });
           const folded = this.folded.has(node.id) && !(vis && this.query);
-          if (!folded) walk(node.children, depth + 1, sec);
+          if (!folded) walk(node.children, depth + 1);
         }
       };
-      if (target && target.item) {
-        walk(target.item.children, 0, target.sec);
-        return out;
-      }
-      for (const sec of target ? [target.sec] : this.sections) {
-        const secShown = !vis || sec.items.some(function any(n) { return vis.has(n.id) || n.children.some(any); }) || (this.lens === "all" && !this.query) ||
-          (this.lens === "active" && !this.query && !sec.closed && !sec.items.length);
-        if (!secShown) continue;
-        out.push({ head: sec });
-        if (!this.folded.has("s:" + sec.ref) || target) walk(sec.items, 0, sec);
-      }
+      walk(target ? target.item.children : this.items, 0);
       return out;
     }
 
@@ -804,16 +781,14 @@
       const now = new Date();
       let h = "";
       const target = this.hoistTarget();
-      if (target && target.item) {
-        h += this.rowHtml({ node: target.item, depth: 0, sec: target.sec }, now, { title: true });
-      }
-      for (const r of rows) h += r.head ? this.headHtml(r.head) : this.rowHtml(r, now, { offset: target && target.item ? 1 : 0 });
-      if (!this.sections.length) {
-        h = `<div class="ol-empty"><p>The outline is empty.</p><p>Add a section for a ticket below, or bring your open loops and their closed steps in from loops.md.</p>` +
+      if (target) h += this.rowHtml({ node: target.item, depth: 0 }, now, { title: true });
+      for (const r of rows) h += this.rowHtml(r, now, { offset: target ? 1 : 0 });
+      if (!this.items.length) {
+        h = `<div class="ol-empty"><p>The outline is empty.</p><p>Add a ticket or an item below, or bring your open loops and their closed steps in from loops.md.</p>` +
           `<button class="btn" data-migrate>Bring loops.md in</button></div>`;
-      } else if (target && target.item && !target.item.children.length) {
+      } else if (target && !target.item.children.length) {
         h += `<div class="ol-none">Nothing under it yet: ↵ at the end of the title adds the first step.</div>`;
-      } else if (!rows.length && !(target && target.item)) {
+      } else if (!rows.length && !target) {
         h += `<div class="ol-none">Nothing here${this.query ? ` matching “${esc(this.query)}”` : ` in ${esc(this.lens)}`}.</div>`;
       }
       this.body.innerHTML = h;
@@ -841,76 +816,77 @@
       if (!target) { el.innerHTML = ""; el.hidden = true; return; }
       el.hidden = false;
       const parts = [`<button data-hoist="">Outline</button>`];
-      parts.push(`<button data-hoist="s:${esc(target.sec.ref)}">${esc(target.sec.key || target.sec.title)}</button>`);
-      if (target.item) {
-        const chain = [];
-        for (let e = this.idx.get(target.item.id); e && e.parent; e = this.idx.get(e.parent.id)) chain.unshift(e.parent);
-        for (const n of chain) parts.push(`<button data-hoist="${esc(n.id)}">${esc(this.display(n).text || "…")}</button>`);
-      }
+      const chain = [];
+      for (let e = this.idx.get(target.item.id); e && e.parent; e = this.idx.get(e.parent.id)) chain.unshift(e.parent);
+      for (const n of chain) parts.push(`<button data-hoist="${esc(n.id)}">${esc(this.crumb(n))}</button>`);
       el.innerHTML = parts.join(`<span>›</span>`);
       el.querySelectorAll("[data-hoist]").forEach((b) => b.addEventListener("click", () => this.hoistTo(b.dataset.hoist || null)));
     }
 
     renderFoot() {
       const foot = this.root.querySelector(".ol-foot");
-      if (this.snapshot) { foot.innerHTML = ""; return; }
+      if (this.snapshot || this.hoistTarget()) { foot.innerHTML = ""; return; }
       const tickets = (this.view && this.view.tickets) || [];
-      if (this.hoistTarget()) { foot.innerHTML = ""; return; }
-      if (!this.addingSection) {
-        foot.innerHTML = `<button class="ol-add" data-addsec>+ Section</button>`;
-      } else {
-        foot.innerHTML = `<div class="ol-secform"><select class="ol-tk"><option value="">Ticket…</option>` +
-          tickets.map((t) => `<option value="${esc(t.key)}">${esc(t.key)} · ${esc(t.title)}</option>`).join("") +
-          `</select><span>or</span><input class="ol-sectitle" placeholder="a title without a ticket" spellcheck="false">` +
-          `<button class="btn" data-secok>Add</button><button class="btn ghost" data-seccancel>Cancel</button></div>`;
-        const sel = foot.querySelector(".ol-tk");
-        const title = foot.querySelector(".ol-sectitle");
-        const ok = () => {
-          const key = sel.value;
-          const t = title.value.trim();
-          if (!key && !t) { sel.focus(); return; }
-          this.addingSection = false;
-          this.sendSection(key ? { op: "section", key } : { op: "section", title: t });
-        };
-        foot.querySelector("[data-secok]").addEventListener("click", ok);
-        title.addEventListener("keydown", (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") { this.addingSection = false; this.renderFoot(); } });
-        sel.addEventListener("change", () => { if (sel.value) ok(); });
-        foot.querySelector("[data-seccancel]").addEventListener("click", () => { this.addingSection = false; this.renderFoot(); });
-        sel.focus();
+      if (!this.addingTicket) {
+        foot.innerHTML = `<button class="ol-add" data-additem>+ Item</button><button class="ol-add" data-addticket>+ Ticket</button>`;
+        foot.querySelector("[data-additem]").addEventListener("click", () => this.newItem(null, "", null, { place: { parent: null } }));
+        foot.querySelector("[data-addticket]").addEventListener("click", () => { this.addingTicket = true; this.renderFoot(); });
+        return;
       }
-      const add = foot.querySelector("[data-addsec]");
-      if (add) add.addEventListener("click", () => { this.addingSection = true; this.renderFoot(); });
+      foot.innerHTML = `<div class="ol-secform"><input class="ol-sectitle" placeholder="New ticket: its title" spellcheck="false">` +
+        `<span>or</span><select class="ol-tk"><option value="">a ticket you have…</option>` +
+        tickets.map((t) => `<option value="${esc(t.key)}">${esc(t.key)} · ${esc(t.title)}</option>`).join("") +
+        `</select><button class="btn" data-secok>Add</button><button class="btn ghost" data-seccancel>Cancel</button></div>`;
+      const sel = foot.querySelector(".ol-tk");
+      const title = foot.querySelector(".ol-sectitle");
+      const ok = () => {
+        const key = sel.value;
+        const t = title.value.trim();
+        if (!key && !t) { title.focus(); return; }
+        this.addingTicket = false;
+        this.sendTicket(key ? { op: "ticket", key, temp: "t" } : { op: "ticket", title: t, temp: "t" });
+      };
+      const cancel = () => { this.addingTicket = false; this.renderFoot(); };
+      foot.querySelector("[data-secok]").addEventListener("click", ok);
+      title.addEventListener("keydown", (e) => { if (e.key === "Enter") ok(); if (e.key === "Escape") cancel(); });
+      sel.addEventListener("change", () => { if (sel.value) ok(); });
+      foot.querySelector("[data-seccancel]").addEventListener("click", cancel);
+      title.focus();
     }
 
-    async sendSection(op) {
+    /** Adds a ticket item (a new local ticket, or one the vault has); the caret goes under it. */
+    async sendTicket(op) {
       this.flushDrafts();
       try {
         const r = await this.api("POST", "/api/outline/op", { ops: [op] });
         this.adopt(r.view);
-        const sec = r.view.sections[r.view.sections.length - 1];
-        if (sec && !sec.items.length) this.newItem(null, "", " ", { place: { parent: null, section: sec.ref } });
+        if (r.created && r.created.length) this.say(`Created ${r.created.join(", ")}`);
+        const id = r.ids && r.ids.t;
+        if (id && this.idx.has(id) && !this.idx.get(id).node.children.length) this.newItem(null, "", " ", { place: { parent: id } });
       } catch (err) { this.toast(err.message); this.renderFoot(); }
     }
 
+    /** Turns an item into a new local ticket named after its text. */
+    async makeTicket(id) {
+      this.flushDrafts();
+      try {
+        const r = await this.api("POST", "/api/outline/op", { ops: [{ op: "ticket", id }] });
+        this.adopt(r.view);
+        this.say(`Created ${(r.created || []).join(", ")}`);
+      } catch (err) { this.toast(err.message); }
+    }
+
+    /** Short name of an item for the breadcrumbs. */
+    crumb(n) {
+      return n.ticket ? n.ticket.key : this.display(n).text || "…";
+    }
+
     display(node) {
+      if (node.ticket) return { text: node.ticket.title || node.ticket.key, loop: null };
       const l = node.loop;
       if (!l) return { text: node.text.replace(DONE_RE, ""), loop: null };
       const tagged = l.tag && node.text.startsWith(`#${l.tag} `);
       return { text: (tagged ? `#${l.tag} ` : "") + l.text, loop: l };
-    }
-
-    headHtml(sec) {
-      const folded = this.folded.has("s:" + sec.ref);
-      const t = sec.ticket;
-      const st = t ? `<span class="ol-st ${esc(t.status)}">${esc(t.status)}</span>` : "";
-      const key = sec.key ? `<a class="ol-key" href="#/t/${esc(sec.key)}" title="Open ${esc(sec.key)}">${esc(sec.key)}</a>` : "";
-      return `<div class="ol-head${sec.closed ? " closed" : ""}" data-sec="${esc(sec.ref)}">` +
-        `<button class="ol-fold${folded ? " folded" : ""}" data-foldsec="${esc(sec.ref)}" aria-label="Fold">${CHEVRON}</button>${key}` +
-        `<span class="ol-htitle" contenteditable="plaintext-only" spellcheck="false" data-sectitle="${esc(sec.ref)}">${esc(sec.title)}</span>${st}` +
-        `<span class="ol-hacts"><button data-secadd="${esc(sec.ref)}" title="New item">+</button>` +
-        `<button data-sechist="${esc(sec.key || "")}" title="History of this ticket"${sec.key ? "" : " hidden"}>⟲</button>` +
-        `<button data-secdone="${esc(sec.ref)}" title="${sec.closed ? "Reopen" : "Mark the ticket's part done"}">✓</button>` +
-        `<button data-sechoist="${esc(sec.ref)}" title="Focus on this section">⤢</button></span></div>`;
     }
 
     rowHtml(r, now, opts = {}) {
@@ -921,8 +897,10 @@
       const hasKids = n.children.length > 0;
       const folded = this.folded.has(n.id);
       const cls = ["ol-row"];
-      if (n.check === "x") cls.push("done");
+      const t = n.ticket;
+      if (n.check === "x" || (t && t.closed)) cls.push("done");
       if (n.check === null) cls.push("note");
+      if (t) cls.push("ticket");
       if (opts.title) cls.push("ol-title");
       const flash = this.flash.get(n.id);
       if (flash) cls.push("flash-" + flash);
@@ -931,10 +909,17 @@
         if (l.dueAt <= now.getTime()) { state = "late"; cls.push("late"); }
         else if (l.dueAt <= endOfDay(now)) state = "today";
       }
-      const box = n.check === null
-        ? `<span class="ol-bul" data-bullet title="Click: focus on it">•</span>`
-        : `<button class="ol-box${n.check === "x" ? " on" : ""}" data-check aria-label="${n.check === "x" ? "Done" : "Open"}" tabindex="-1"></button>`;
+      const box = t
+        ? `<span class="ol-bul tk" data-bullet title="${esc(t.key)}: click to open it as a page (⌘])">◆</span>`
+        : n.check === null
+          ? `<span class="ol-bul" data-bullet title="Click: open it as a page (⌘])">•</span>`
+          : `<button class="ol-box${n.check === "x" ? " on" : ""}" data-check aria-label="${n.check === "x" ? "Done" : "Open"}" tabindex="-1"></button>`;
       let chips = "";
+      if (t) {
+        chips += `<a class="ol-chip key" href="#/t/${esc(t.key)}" title="${t.exists ? `Open ${esc(t.key)}` : `${esc(t.key)} is not in the vault yet`}">${esc(t.key)}</a>`;
+        if (t.status) chips += `<span class="ol-chip st ${esc(t.status)}" title="My status${t.jiraStatus ? `; Jira: ${esc(t.jiraStatus)}` : ""}">${esc(t.status)}</span>`;
+        if (t.closed) chips += `<span class="ol-chip closed">closed</span>`;
+      }
       if (l) {
         if (l.owner !== "me") chips += `<span class="ol-chip who" title="Waiting on ${esc(l.owner)}">${esc(l.owner)}</span>`;
         if (l.due) {
@@ -953,9 +938,10 @@
       const editing = this.ctxEdit === n.id ? `<textarea class="ol-ctxedit" rows="${Math.max(2, n.context.length + 1)}" placeholder="A note under this item: context, links, quotes. ⌘↵ or Esc to finish.">${esc(n.context.join("\n"))}</textarea>` : "";
       const text = this.focus && this.focus.id === n.id ? this.rawText(n.id) : d.text;
       return `<div class="${cls.join(" ")}" data-id="${esc(n.id)}" style="--d:${depth}">` +
-        `<span class="ol-grip" draggable="true" title="Drag to move · click to select · double-click to focus · right-click for more">⋮⋮</span>` +
+        `<span class="ol-handle"><button class="ol-plus" data-plus tabindex="-1" title="Add an item below (⌥-click: above)">+</button>` +
+        `<span class="ol-grip" draggable="true" title="Drag to move it · click for the menu · ⇧-click to select">⠿</span></span>` +
         `<button class="ol-fold${hasKids ? "" : " none"}${folded ? " folded" : ""}" data-fold tabindex="-1" aria-label="Fold">${CHEVRON}</button>${box}` +
-        `<div class="ol-main"><div class="ol-line"><div class="ol-text" contenteditable="plaintext-only" spellcheck="false" data-ph="${n.check === null ? "Note" : "To do"}">${esc(text)}</div>` +
+        `<div class="ol-main"><div class="ol-line"><div class="ol-text" contenteditable="plaintext-only" spellcheck="false" data-ph="${t ? "Ticket title" : n.check === null ? "Note" : "To do"}">${esc(text)}</div>` +
         (chips ? `<span class="ol-chips">${chips}</span>` : "") + `</div>${ctx}${editing}</div>` +
         (this.menu === n.id ? this.menuHtml(n) : "") + `</div>`;
     }
@@ -967,7 +953,11 @@
         `<button data-mmove="up">Move up <kbd>⌥↑</kbd></button>` +
         `<button data-mmove="down">Move down <kbd>⌥↓</kbd></button>` +
         `<hr>` +
-        (n.check === null ? `<button data-mk="task">Make it a task</button>` : `<button data-mk="note">Make it a note (no checkbox)</button>`) +
+        (n.ticket
+          ? `<button data-mopen>Open ${esc(n.ticket.key)}</button><button data-mclose>${n.ticket.closed ? "Reopen the ticket" : "Close the ticket"} <kbd>⌘↵</kbd></button>` +
+            `<button data-mtkhist>History of ${esc(n.ticket.key)}</button>`
+          : `<button data-mticket>Make it a ticket (a new local one)</button>` +
+            (n.check === null ? `<button data-mk="task">Make it a task</button>` : `<button data-mk="note">Make it a bullet (no checkbox)</button>`)) +
         `<button data-mctx>${n.context.length ? "Edit the note" : "Add a note"} <kbd>⇧↵</kbd></button>` +
         `<button data-mhoist>Focus on it <kbd>⌘]</kbd></button>` +
         `<button data-mhist>History <kbd>⌥H</kbd></button>` +
@@ -1021,22 +1011,6 @@
           }
         }, 0);
       }
-      if (t.classList.contains("ol-htitle")) {
-        const ref = t.dataset.sectitle;
-        const sec = this.sections.find((s) => s.ref === ref);
-        const title = t.textContent.trim();
-        if (sec && !sec.key && !title) { t.textContent = sec.title; this.toast("A section without a ticket needs a title."); }
-        else if (sec && title !== sec.title) {
-          const old = sec.title;
-          // A free section is known by its title, so its ref changes with it.
-          const newRef = sec.key ? ref : "#" + title;
-          sec.title = title;
-          sec.ref = newRef;
-          this.undoStack.push({ ops: [{ op: "sectionSet", section: ref, title }], inverse: [{ op: "sectionSet", section: newRef, title: old }] });
-          this.redoStack = [];
-          this.send([{ op: "sectionSet", section: ref, title }]);
-        }
-      }
       if (t.classList.contains("ol-ctxedit")) this.finishContext(t);
     }
 
@@ -1045,27 +1019,6 @@
       if (this.snapshot) return;
       if (t.closest("[data-migrate]")) return this.migrate();
       const row = t.closest(".ol-row");
-      const head = t.closest(".ol-head");
-      if (head) {
-        const ref = head.dataset.sec;
-        if (t.closest("[data-foldsec]")) return this.toggleFold("s:" + ref);
-        if (t.closest("[data-secadd]")) {
-          const sec = this.sections.find((s) => s.ref === ref);
-          this.folded.delete("s:" + ref);
-          return this.newItem(null, "", " ", { place: { parent: null, section: ref, index: sec.items.length } });
-        }
-        if (t.closest("[data-sechist]")) return this.openHistory({ mode: "key", key: t.closest("[data-sechist]").dataset.sechist });
-        if (t.closest("[data-sechoist]")) return this.hoistTo("s:" + ref);
-        if (t.closest("[data-secdone]")) {
-          const sec = this.sections.find((s) => s.ref === ref);
-          sec.closed = !sec.closed;
-          const op = { op: "sectionSet", section: ref, closed: sec.closed };
-          this.undoStack.push({ ops: [op], inverse: [{ op: "sectionSet", section: ref, closed: !sec.closed }] });
-          this.render();
-          return this.send([op]);
-        }
-        return;
-      }
       if (!row) {
         if (this.menu) { this.menu = null; this.render(); }
         return;
@@ -1086,12 +1039,22 @@
         write(CTX_OPEN_KEY, [...this.ctxOpen]);
         return this.render();
       }
+      if (t.closest("[data-plus]")) {
+        // As in Notion: + adds an empty item right below (⌥: above), at the same level.
+        const n = this.idx.get(id).node;
+        const kind = n.ticket || n.check === null ? null : " ";
+        return this.newItem(id, "", kind, e.altKey ? { place: this.placeOf(id) } : {});
+      }
       if (t.closest(".ol-grip")) {
-        if (e.shiftKey && this.sel) this.sel.head = id;
-        else this.sel = { anchor: id, head: id };
-        document.activeElement && document.activeElement.blur && document.activeElement.blur();
-        this.body.focus();
-        return this.paintSelection();
+        if (e.shiftKey) {
+          if (this.sel) this.sel.head = id;
+          else this.sel = { anchor: this.focus ? this.focus.id : id, head: id };
+          document.activeElement && document.activeElement.blur && document.activeElement.blur();
+          this.body.focus();
+          return this.paintSelection();
+        }
+        // As in Notion: a click on the handle opens the item's menu (dragging it moves the item).
+        return this.openMenu(id);
       }
       if (t.closest(".ol-ctxt")) {
         if (t.tagName === "A") return;
@@ -1112,6 +1075,10 @@
         if (how === "out") return this.outdent([id]);
         return this.shift([id], how === "up" ? -1 : 1);
       }
+      if (t.closest("[data-mticket]")) return this.makeTicket(id);
+      if (t.closest("[data-mopen]")) { this.render(); return this.go && this.go(`#/t/${this.idx.get(id).node.ticket.key}`); }
+      if (t.closest("[data-mclose]")) return this.toggleCheck([id]);
+      if (t.closest("[data-mtkhist]")) return this.openHistory({ mode: "key", key: this.idx.get(id).node.ticket.key });
       if (t.closest("[data-mk]")) return this.setKind(id, t.closest("[data-mk]").dataset.mk === "task" ? " " : null);
       if (t.closest("[data-mctx]")) return this.editContext(id);
       if (t.closest("[data-mhoist]")) return this.hoistTo(id);
@@ -1247,7 +1214,7 @@
         // The title of a focused branch, or an open parent: the new item is its first child.
         const target = this.hoistTarget();
         const isTitle = !!(target && target.item && target.item.id === id);
-        const intoKids = isTitle || (node.children.length && !this.folded.has(id) && !after);
+        const intoKids = isTitle || ((node.ticket || node.children.length) && !this.folded.has(id) && !after);
         const place = intoKids ? { parent: id, index: 0 } : { after: id };
         ops.push({ op: "insert", place, item: { id: nid, text: after, check: kind, context: [] } });
         this.act(ops, inverse, { id: nid, offset: 0 });
@@ -1283,8 +1250,8 @@
         e.preventDefault();
         const target = this.hoistTarget();
         if (!target) return;
-        if (target.item) { const p = this.idx.get(target.item.id).parent; return this.hoistTo(p ? p.id : "s:" + target.sec.ref); }
-        return this.hoistTo(null);
+        const p = this.idx.get(target.item.id).parent;
+        return this.hoistTo(p ? p.id : null);
       }
       if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); return e.shiftKey ? this.redo() : this.undo(); }
       if (e.key === "Escape") {
@@ -1641,18 +1608,10 @@
     onDragOver(e) {
       if (!this.drag) return;
       const row = e.target.closest(".ol-row");
-      const head = e.target.closest(".ol-head");
       const line = this.root.querySelector(".ol-drop");
-      if (!row && !head) return;
+      if (!row) return;
       e.preventDefault();
       const host = this.root.querySelector(".ol-page").getBoundingClientRect();
-      if (head) {
-        const box = head.getBoundingClientRect();
-        this.drag.target = { section: head.dataset.sec };
-        line.hidden = false;
-        Object.assign(line.style, { top: `${box.bottom - host.top}px`, left: `${box.left - host.left + 28}px`, width: `${box.width - 40}px` });
-        return;
-      }
       const id = row.dataset.id;
       if (this.drag.ids.some((d) => d === id || this.isUnder(id, d))) { line.hidden = true; this.drag.target = null; return; }
       const box = row.getBoundingClientRect();
@@ -1674,14 +1633,13 @@
       this.moveTo(ids, (id) => {
         let place;
         if (prev) place = { after: prev };
-        else if (target.section) place = { parent: null, section: target.section, index: 0 };
         else if (target.mode === "child") { this.folded.delete(target.id); place = { parent: target.id, index: 0 }; }
         else if (target.mode === "after") place = { after: target.id };
         else {
           // Before the target: its index among the siblings that stay once the item is taken out.
           const te = this.idx.get(target.id);
           const i = this.siblingsOf(target.id).filter((n) => n.id !== id).indexOf(te.node);
-          place = te.parent ? { parent: te.parent.id, index: i } : { parent: null, section: te.sec.ref, index: i };
+          place = { parent: te.parent ? te.parent.id : null, index: i };
         }
         prev = id;
         return place;
@@ -1787,7 +1745,6 @@
       if (!e) { this.toast("That item is no longer in the outline."); return; }
       this.lens = "all"; this.query = ""; this.hoist = null;
       for (let x = e; x && x.parent; x = this.idx.get(x.parent.id)) this.folded.delete(x.parent.id);
-      this.folded.delete("s:" + e.sec.ref);
       this.flash.set(id, "changed");
       this.render();
       const row = this.body.querySelector(`.ol-row[data-id="${CSS.escape(id)}"]`);
@@ -1801,19 +1758,16 @@
       const now = new Date();
       let h = `<div class="ol-banner">The outline at the end of <b>${esc(dayLabel(s.day))}</b> — read only. ` +
         `<button class="btn" data-back>Back to now</button></div>`;
-      const walk = (items, depth, sec) => {
+      const walk = (items, depth) => {
         for (const n of items) {
           const m = marks.get(n.id);
-          let row = this.rowHtml({ node: n, depth, sec }, now);
+          let row = this.rowHtml({ node: n, depth }, now);
           if (m) row = row.replace(`class="ol-row`, `class="ol-row mark-${m}`);
           h += row.replace(/contenteditable="plaintext-only"/g, "").replace(/draggable="true"/g, "");
-          walk(n.children, depth + 1, sec);
+          walk(n.children, depth + 1);
         }
       };
-      for (const sec of s.sections) {
-        h += this.headHtml(sec).replace(/contenteditable="plaintext-only"/g, "").replace(/<span class="ol-hacts">[\s\S]*?<\/span><\/div>$/, "</div>");
-        walk(sec.items, 0, sec);
-      }
+      walk(s.items, 0);
       this.body.innerHTML = `<div class="ol-snap">${h}</div>`;
       this.root.querySelector(".ol-crumbs").hidden = true;
       this.root.querySelector(".ol-foot").innerHTML = "";
@@ -1830,6 +1784,14 @@
       const el = this.root.querySelector(".ol-keys");
       if (!el.hidden) { el.hidden = true; return; }
       const groups = [
+        ["Tickets, folders, steps", [
+          ["Everything is an item", "a ticket, a project folder, a step: any item can go inside any other, as deep as you like"],
+          ["+ Ticket", "at the bottom: a new local ticket by its title, or one you have already"],
+          ["⠿ → Make it a ticket", "turns an item into a new local ticket; what is under it stays"],
+          ["type a key", "a bullet typed as WORK-012 becomes that ticket"],
+          ["ticket in ticket", "put a ticket inside another: it becomes its sub-ticket (parent in notes.md)"],
+          ["⌘ + Enter on a ticket", "closes or reopens it"],
+        ]],
         ["Writing", [
           ["Enter", "a new item below. At the start of a line: a new one above; in the middle: splits the line"],
           ["Shift + Enter", "a note under the item (context, links, quotes)"],
@@ -1841,8 +1803,9 @@
           ["Tab", "shifts the item right: it becomes a sub-item of the one above. Its own sub-items come along"],
           ["Shift + Tab", "shifts it back left, one level out"],
           ["⌥ Option + ↑ / ↓", "moves the item, with everything under it, up or down"],
-          ["drag ⋮⋮", "the handle left of an item: drag to put it anywhere; drop to the right to nest it"],
-          ["right-click ⋮⋮", "the same as buttons: in / out, up / down, focus, history, delete"],
+          ["drag ⠿", "the handle left of an item (on hover): drag to put it anywhere; drop it a bit to the right to put it inside the item above"],
+          ["click ⠿", "the item’s menu: in / out, up / down, make it a ticket, focus, history, delete"],
+          ["+", "next to the handle: a new item right below"],
         ]],
         ["Several items", [
           ["drag across", "press on an item and move the mouse over others: whole items get selected"],
@@ -1869,6 +1832,11 @@
   }
 
   // ---------- helpers ----------
+
+  /** Checked off, or a closed ticket. */
+  function isDone(n) {
+    return n.check === "x" || !!(n.ticket && n.ticket.closed);
+  }
 
   function countAll(n) {
     let c = 0;

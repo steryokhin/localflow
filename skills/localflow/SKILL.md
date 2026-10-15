@@ -106,7 +106,7 @@ Each fact lives in one place:
 | `ai-summary.md` | understanding of the ticket | written at the start, edited in place (no "Update" blocks), ends with open questions |
 | `actions.md` | the plan only: phases, checkboxes, how to verify | no log, status or reference material; about 80 lines at most |
 | `research-<topic>.md` | optional, one topic per file | edited in place: a new finding replaces the old conclusion |
-| `<vault>/outline.md` | one tree for all tickets: `## KEY · title`, then steps → subtasks → waits, with `> ` notes under items | the working plan of the day and every loop; each change is committed, so its history is in git |
+| `<vault>/outline.md` | one tree of items: folders, tickets (`- KEY · title`), steps, subtasks, waits, nested at will, with `> ` notes under items | the working plan of the day and every loop; each change is committed, so its history is in git |
 | `<vault>/loops.md` | the open loops of `outline.md`, one line each | editable; an edit there goes into the outline (and the other way round) |
 | `<vault>/notes/repos/<repo>.md` | the repository, not the ticket: environment, build and test commands, process (labels, reviews), pitfalls | shared by every ticket with `repo: <repo>`; move repo knowledge here instead of copying it into tickets |
 
@@ -164,22 +164,31 @@ there (not in notes.md, not in actions.md). Ids are short (`k3f9`; older loops k
 
 ## Outline
 
-`<vault>/outline.md` is the user's main working view (they used to keep it in Notion): per ticket a
-`## KEY · title` heading, under it steps, subtasks and waits as a nested checklist, `> ` lines for
-context. The web UI's Outline page edits the same file; `docs/outline-format.md` has the format.
+`<vault>/outline.md` is the user's main working view (they used to keep it in Notion): one tree
+where everything is an item. A ticket is a bullet `- KEY · title` (` ✓` at the end when closed);
+folders, steps, subtasks and waits are items too, and anything can sit inside anything, tickets
+inside tickets included. `> ` lines are context. An item belongs to the nearest ticket above it.
+The web UI's Outline page edits the same file; `docs/outline-format.md` has the format.
 
 ```markdown
-## EXP-123 · Login crash on swipe
-- [x] reproduce on iOS 26 ^k3f9
-- [ ] research the swipe handler ^m4p2
-  > Tom: the crash is in the swipe handler, not the cache
-  - [ ] wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios ^p5r6
+- Mobile ^p2q3
+  - EXP-123 · Login crash on swipe ^a7c4
+    - [x] reproduce on iOS 26 · done 2026-10-13 10:20 ^k3f9
+    - [ ] research the swipe handler ^m4p2
+      > Tom: the crash is in the swipe handler, not the cache
+      - [ ] wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios ^p5r6
+    - EXP-130 · Crash in the image cache ^b5d6
 ```
 
+- **Tickets in the tree.** `lf outline ticket KEY [--under ID]` puts an existing ticket in;
+  `lf outline ticket "title"` makes a new local ticket there; `lf outline ticket ID` turns an item
+  into a new local ticket (what is under it stays). A ticket moved under another one gets
+  `parent: KEY` in its notes.md (taken out: removed), so do not set `parent:` by hand for tickets
+  that are in the outline. Checking off a ticket item closes it (` ✓`).
 - **Loops and steps.** A wait or a promise is a loop: `lf loop … --key KEY` (it lands in the outline
   under its ticket). A plain step with nobody to wait on and no deadline is just an item:
-  `lf outline add "call Jim" --under m4p2` (or `--key KEY`, `--after ID`, `--top`, `--note` for a
-  bullet without a checkbox). `lf outline check ID "outcome"`, `uncheck`, `edit ID "text"`,
+  `lf outline add "call Jim" --under m4p2` (or `--key KEY`, `--after ID`, `--top` for the top
+  level, `--note` for a bullet without a checkbox). `lf outline check ID "outcome"`, `uncheck`, `edit ID "text"`,
   `note ID "a line of context"`, `move ID --under ID`, `rm ID`. Checking a loop off logs it like `lf done`.
 - **Editing the file directly** is fine for bigger rewrites: keep every `^id` exactly, 2 spaces per
   level, fields joined by ` · `; never reformat lines you are not changing. Prefer `lf outline …`

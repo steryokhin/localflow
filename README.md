@@ -98,7 +98,7 @@ sync; when Jira has moved further than your status, `lf ls` points it out.
 | `lf loop` / `lf done` / `lf bump` / `lf loops` | open loops: what you wait for, from whom, until when (see `lf help`) |
 | `lf outline [--lens L] [--key K] [--find T]` | the outline tree through a lens: all, active, today, waiting, expired, standup |
 | `lf outline --at DAY` / `--history KEY\|ID` / `--days` | the outline as it was on a day, how a ticket or an item evolved, changes day by day |
-| `lf outline add\|check\|edit\|note\|move\|rm …` | edit items by id; `lf outline --migrate` moves loops.md in |
+| `lf outline add\|check\|edit\|note\|move\|rm\|ticket …` | edit items by id; `ticket` puts a ticket in the tree (new local one, existing one, or an item turned into one); `lf outline --migrate` moves loops.md in |
 | `lf report [--date D] [--write]` | the day, from the vault's git history and the session log; no model involved |
 | `lf serve [--port 7420] [--open]` | the local web UI (see below) |
 | `lf doctor [--offline]` | check runtime, vault, token and Jira access |
@@ -170,10 +170,15 @@ saves, and so does a pause. The page follows the vault: files added or changed b
 or your editor appear without a reload, and an open editor is never overwritten.
 
 **Outline.** The first nav entry is the Outline: `outline.md` as one editable tree, like an
-outliner (Bike, Workflowy). Enter makes the next item (at the start of a line: one above), Tab /
+outliner (Bike, Workflowy, Notion). Everything is an item: project folders, tickets (`KEY · title`),
+steps and waits nest inside each other to any depth and move alike; a ticket put inside another
+becomes its sub-ticket (`parent:` in notes.md). *+ Ticket* at the bottom makes a new local ticket or
+brings one you have; *Make it a ticket* in an item's menu turns that item into one. Hovering an item
+shows **+** (a new item below) and **⠿** (drag it; click for its menu). Enter makes the next item (at the start of a line: one above), Tab /
 Shift-Tab indent and outdent with children, ⌥↑ / ⌥↓ move a branch, ⌘↵ checks off, ⇧↵ edits the
 note under an item, ⌘. folds, ⌘] / ⌘[ focus in and out of a branch, Esc selects rows (⇧↑↓ to
-extend, then Tab, ⌥↑↓, ⌫, ⌘C), ⌘Z undoes; rows also drag by their handle. Typing
+extend, then Tab, ⌥↑↓, ⌫, ⌘C; dragging the mouse across items selects them too, with a bar of
+actions over them), ⌘Z undoes. A− / A+ change the text size. Typing
 `· from Jim · by tomorrow` turns an item into a loop with chips (late ones in red). Lenses on top
 — All, Active, Today, Waiting, Expired, Standup — and a filter keep the parents of what they show.
 Changes made by `lf` or an agent appear live and glow for a few seconds. *History* (⌥H) shows an
