@@ -34,7 +34,7 @@ import type { State, UnreadEvent } from "./vault/state.ts";
 import { SMART_GROUPS, inSmartGroup, waitingByKey } from "./vault/smart.ts";
 import { alignTickets, jiraLocalStatus, statusMismatch } from "./vault/align.ts";
 import type { SmartGroup } from "./vault/smart.ts";
-import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, listTickets, notesStub, requireTicket } from "./vault/store.ts";
+import { NOTES_FILE, SYNC_OWNED, TICKET_FILE, createLocalTicket, listTickets, notesStub, requireTicket } from "./vault/store.ts";
 import type { Ticket } from "./vault/store.ts";
 
 // Ticket text comes from other people (Jira titles, comments): control characters are dropped
@@ -403,22 +403,8 @@ export function cmdReport(vault: string, opts: { date?: string; write?: boolean 
 }
 
 export function cmdCreate(vault: string, prefix: string, title: string, opts: { type?: string; priority?: string }): void {
-  const config = loadConfig(vault);
-  if (!/^[A-Z][A-Z0-9_]*$/.test(prefix)) throw new UserError(`Prefix must look like WORK or LF2 (got "${prefix}").`);
-  if (config.projects[prefix]?.source === "jira") {
-    throw new UserError(`${prefix} is a Jira project: its tickets come from the sync, not from \`lf create\`.`);
-  }
   if (!title.trim()) throw new UserError('Usage: lf create PREFIX "title"');
-  const numbers = listTickets(vault)
-    .filter((t) => t.project === prefix)
-    .map((t) => Number(t.key.slice(prefix.length + 1)));
-  const next = Math.max(0, ...numbers) + 1;
-  const key = `${prefix}-${String(next).padStart(3, "0")}`;
-  const slug = slugify(title);
-  const dir = path.join(vault, PROJECTS_DIR, prefix, slug ? `${key}-${slug}` : key);
-  const fm = { id: key, title: title.trim(), type: opts.type ?? "Task", source: "local", priority: opts.priority ?? "P2", created: today() };
-  writeFileAtomic(path.join(dir, TICKET_FILE), dumpFrontmatter(fm) + `\n# ${key}: ${title.trim()}\n\n`);
-  writeFileAtomic(path.join(dir, NOTES_FILE), notesStub(key, "inbox"));
+  const { key, dir } = createLocalTicket(vault, prefix, title, opts);
   refreshInbox(vault);
   out(`${key}  ${dir}`);
 }

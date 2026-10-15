@@ -1,9 +1,9 @@
 [
   {
-    "key": null,
-    "title": "Inbox",
-    "closed": false,
-    "items": [
+    "id": "f2g3",
+    "check": null,
+    "text": "Inbox",
+    "children": [
       {
         "id": "n2p3",
         "check": " ",
@@ -22,10 +22,15 @@
     ]
   },
   {
-    "key": "WORK-7",
-    "title": "Mixed",
-    "closed": false,
-    "items": [
+    "id": "h4j5",
+    "check": null,
+    "text": "WORK-7 · Mixed",
+    "ticket": {
+      "key": "WORK-7",
+      "title": "Mixed",
+      "closed": false
+    },
+    "children": [
       {
         "id": "u8v9",
         "check": "x",

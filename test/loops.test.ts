@@ -67,7 +67,7 @@ test("lf loop writes one line per loop, tracks the ticket, and closing logs it",
   const a = addLoop(vault, { text: "PR #41 review", key: "work-001", owner: "Tom", by: "18:00", onExpiry: "ping in #ios-reviews" }, MON);
   assert.match(a.id, /^[a-z][2-9][a-z][2-9]$/, "new ids are short and random, like Bike's");
   assert.match(read("loops.md"), new RegExp(`^- \\[ \\] \\^${a.id} · 2026-10-12 11:00 · WORK-001 · PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews$`, "m"));
-  assert.match(read("outline.md"), new RegExp(`^## WORK-001 · Swipe fix\n- \\[ \\] PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews · opened 2026-10-12 11:00 \\^${a.id}$`, "m"));
+  assert.match(read("outline.md"), new RegExp(`^- WORK-001 · Swipe fix \\^[a-z0-9]{4}\n  - \\[ \\] PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews · opened 2026-10-12 11:00 \\^${a.id}$`, "m"));
   assert.match(notes("WORK-001"), /^tracked: true$/m);
   const b = addLoop(vault, { text: "Istio docs · onboarding", by: "2026-10-15" }, MON);
   assert.equal(b.owner, "me");
@@ -76,7 +76,7 @@ test("lf loop writes one line per loop, tracks the ticket, and closing logs it",
   const closed = closeLoop(vault, a.id, "Tom approved, 2 comments", new Date(2026, 9, 12, 17, 40));
   assert.equal(closed.loggedTo, `${findTicket(vault, "WORK-001")!.rel}/notes.md`);
   assert.doesNotMatch(read("loops.md"), new RegExp(`${a.id} ·`));
-  assert.match(read("outline.md"), new RegExp(`^- \\[x\\] PR #41 review .*\\^${a.id}$`, "m"), "a closed loop stays in the outline, checked off");
+  assert.match(read("outline.md"), new RegExp(`^ *- \\[x\\] PR #41 review .*\\^${a.id}$`, "m"), "a closed loop stays in the outline, checked off");
   assert.match(notes("WORK-001"), new RegExp(`## Log\\n\\n- 2026-10-12 17:40 — Tom approved, 2 comments \\(${a.id}: PR #41 review, from Tom\\)\\n$`));
 
   closeLoop(vault, "istio", "", new Date(2026, 9, 12, 18, 0));
@@ -110,7 +110,7 @@ test("hand-written lines are understood (Russian markers too); reads never write
   closeLoop(vault, addLoop(vault, { text: "any write", by: "+1h" }, MON).id, "", MON);
   assert.match(read("loops.md"), new RegExp(`^- \\[ \\] \\^${mark.id} · 2026-10-12 · — · написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли$`, "m"));
   assert.match(read("loops.md"), /^- \[x\] done by hand, ignored$/m);
-  assert.match(read("outline.md"), new RegExp(`^## No ticket\n(- .*\n)*- \\[ \\] написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли · opened 2026-10-12 \\^${mark.id}$`, "m"));
+  assert.match(read("outline.md"), new RegExp(`^- No ticket \\^[a-z0-9]{4}\n(  - .*\n)*  - \\[ \\] написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли · opened 2026-10-12 \\^${mark.id}$`, "m"));
 });
 
 test("the board puts expired loops first and lists tracked tickets that have nothing going on", () => {

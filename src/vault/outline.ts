@@ -1,15 +1,21 @@
-// outline.md: one plain-text tree of tickets → actions → subtasks → waits (LFLOW-024).
+// outline.md: one plain-text tree where everything is an item (LFLOW-024, one tree since LFLOW-026).
 //
-//   ## PROJ-1 · Login crash on swipe
-//   - [x] reproduce on iOS 26 ^k3f9
-//   - [ ] research issue #123 ^m4p2
-//     > Tom: the crash is in the swipe handler
-//     - [ ] wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios ^L7
+//   - Mobile ^p2q3
+//     - PROJ-1 · Login crash on swipe ^a7c4
+//       - [x] reproduce on iOS 26 ^k3f9
+//       - [ ] research issue #123 ^m4p2
+//         > Tom: the crash is in the swipe handler
+//         - [ ] wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios ^L7
+//       - PROJ-2 · Crash in the cache ^b5d6
 //
-// A "## KEY · title" heading is a ticket root ("## title" without a key is a free root; a trailing
-// " ✓" marks it closed). Items are "- [ ]" / "- [x]" tasks or plain "- " bullets, nested by
-// indentation; "> " lines right under an item are its context. "^id" at the end of an item is its
-// permanent id. A task with a "by" field is a loop (see loops.ts for the fields).
+// Items are "- [ ]" / "- [x]" tasks or plain "- " bullets, nested by indentation to any depth;
+// "> " lines right under an item are its context; "^id" at the end is its permanent id. A bullet
+// whose text is "KEY · title" (or just "KEY") stands for a ticket; a trailing " ✓" marks it closed.
+// Everything under it belongs to that ticket (the nearest one up the tree). Tickets, folders and
+// steps nest and move alike. A task with a "by" field is a loop (see loopfields.ts).
+//
+// Files written before one tree had "## KEY · title" headings with the items under them; they are
+// read as bullets with the items one level in, and the next write stores that form.
 //
 // Everything here is pure and line-based: an operation rewrites only the lines it is about, so
 // untouched lines keep every byte. Items without an id get a deterministic one derived from their
@@ -42,24 +48,25 @@ export interface Item {
   /** First line after the whole subtree. */
   end: number;
   parent: Item | null;
-  section: Section;
   children: Item[];
+  /** Set when the item stands for a ticket ("KEY · title" bullet). */
+  ticket: TicketHead | null;
+  /** The nearest ticket item: the item itself or the closest one up the tree; null when none. */
+  home: Item | null;
+  /** The ticket this item belongs to: home's key. */
+  key: string | null;
 }
 
-export interface Section {
-  /** Index of the "## " line. */
-  line: number;
-  key: string | null;
+export interface TicketHead {
+  key: string;
   title: string;
   closed: boolean;
-  items: Item[];
-  /** First line of the next section (or the end of the file). */
-  end: number;
 }
 
 export interface Outline {
   lines: string[];
-  sections: Section[];
+  /** Items at the top level, in file order. */
+  roots: Item[];
   /** Every item, in file order. */
   items: Item[];
   byRef: Map<string, Item>;
@@ -112,16 +119,41 @@ export function width(ws: string): number {
 
 const leading = (line: string): string => /^[ \t]*/.exec(line)![0];
 
-export function parseHeading(text: string): { key: string | null; title: string; closed: boolean } {
+/** A bullet's text as a ticket: "KEY · title" or "KEY", with " ✓" when closed. */
+export function parseTicketText(text: string): TicketHead | null {
   const closed = CLOSED_MARK_RE.test(text);
-  const body = text.replace(CLOSED_MARK_RE, "").trim();
-  const m = KEY_HEAD_RE.exec(body);
-  return m ? { key: m[1], title: (m[2] ?? "").trim(), closed } : { key: null, title: body, closed };
+  const m = KEY_HEAD_RE.exec(text.replace(CLOSED_MARK_RE, "").trim());
+  return m ? { key: m[1], title: (m[2] ?? "").trim(), closed } : null;
 }
 
-export function formatHeading(key: string | null, title: string, closed: boolean): string {
-  const body = key ? (title ? `${key} · ${title}` : key) : title;
-  return `## ${body}${closed ? " ✓" : ""}`;
+export function ticketText(key: string, title: string, closed = false): string {
+  return `${title ? `${key} · ${title}` : key}${closed ? " ✓" : ""}`;
+}
+
+/**
+ * The text of a file from before one tree, in the one-tree form: each "## heading" becomes a top
+ * bullet ("## title ✓" without a key: a checked task) and what was under it moves one level in.
+ */
+export function fromHeadings(lines: string[]): string[] {
+  if (!lines.some((l) => HEAD_RE.test(l))) return lines;
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of lines) {
+    const h = HEAD_RE.exec(line);
+    if (h) {
+      const t = parseTicketText(h[1]);
+      const closed = CLOSED_MARK_RE.test(h[1]);
+      const title = h[1].replace(CLOSED_MARK_RE, "").trim();
+      // A blank line between top-level blocks reads better than one glued to the previous block.
+      while (out.length && !out[out.length - 1].trim()) out.pop();
+      if (out.length) out.push("");
+      out.push(t ? `- ${ticketText(t.key, t.title, t.closed)}` : closed ? `- [x] ${title}` : `- ${title}`);
+      inSection = true;
+      continue;
+    }
+    out.push(inSection && line.trim() ? `  ${line}` : line);
+  }
+  return out;
 }
 
 /** Splits an item line's text into text and id. */
@@ -134,12 +166,12 @@ function splitId(rest: string): { text: string; id: string | null } {
 export function parseOutline(raw: string): Outline {
   // Windows line ends are read as plain ones (and written back as plain ones).
   const text = raw.replace(/\r\n?/g, "\n");
-  const lines = text.replace(/\n$/, "").split("\n");
-  if (text === "") lines.length = 0;
-  const sections: Section[] = [];
+  const split = text.replace(/\n$/, "").split("\n");
+  if (text === "") split.length = 0;
+  const lines = fromHeadings(split);
+  const roots: Item[] = [];
   const items: Item[] = [];
-  let section: Section | null = null;
-  let stack: Item[] = [];
+  const stack: Item[] = [];
   // The item whose context block is still open (its line or context lines came last).
   let ctxOwner: Item | null = null;
 
@@ -148,27 +180,20 @@ export function parseOutline(raw: string): Outline {
   };
 
   lines.forEach((line, i) => {
-    const h = HEAD_RE.exec(line);
-    if (h) {
-      if (section) section.end = i;
-      section = { line: i, ...parseHeading(h[1]), items: [], end: lines.length };
-      sections.push(section);
-      stack = [];
-      ctxOwner = null;
-      return;
-    }
-    if (!section) return;
     const m = ITEM_RE.exec(line);
     if (m) {
       const indent = width(m[1]);
       while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
       const parent = stack[stack.length - 1] ?? null;
       const { text: body, id } = splitId(m[3]);
+      const check: Check = m[2] === undefined ? null : m[2] === " " ? " " : "x";
+      const ticket = check === null ? parseTicketText(body) : null;
       const it: Item = {
-        id, ref: id ?? "", line: i, indent, check: m[2] === undefined ? null : m[2] === " " ? " " : "x", text: body, context: [],
-        ctxEnd: i + 1, end: i + 1, parent, section, children: [],
+        id, ref: id ?? "", line: i, indent, check, text: body, context: [], ctxEnd: i + 1, end: i + 1, parent, children: [], ticket, home: null, key: null,
       };
-      (parent ? parent.children : section.items).push(it);
+      it.home = ticket ? it : parent?.home ?? null;
+      it.key = it.home?.ticket?.key ?? null;
+      (parent ? parent.children : roots).push(it);
       items.push(it);
       stack.push(it);
       touch(i);
@@ -197,7 +222,11 @@ export function parseOutline(raw: string): Outline {
   for (const it of items) {
     if (it.id && byRef.get(it.id) === it) continue;
     // A duplicate id typed by hand is treated as missing: it gets its own on the next write.
-    const seed = `${it.section.key ?? it.section.title}\0${it.text}`;
+    // The scope is the ticket, or the top item (a section's title in files from before one tree).
+    let root = it;
+    while (root.parent) root = root.parent;
+    const scope = it.home && it.home !== it ? it.home.ticket!.key : root !== it ? root.text : "";
+    const seed = `${scope}\0${it.text}`;
     const n = (seen.get(seed) ?? 0) + 1;
     seen.set(seed, n);
     it.ref = derivedId(`${seed}\0${n}`, taken);
@@ -205,7 +234,7 @@ export function parseOutline(raw: string): Outline {
     taken.add(it.ref);
     byRef.set(it.ref, it);
   }
-  return { lines, sections, items, byRef };
+  return { lines, roots, items, byRef };
 }
 
 export function outlineText(o: Outline | string[]): string {
@@ -242,13 +271,17 @@ export function ancestors(it: Item): Item[] {
   return out;
 }
 
-export function sectionRef(s: Section): string {
-  return s.key ?? `#${s.title}`;
+/** The item that stands for a ticket (the first one, if the key is there twice). */
+export function ticketItem(o: Outline, key: string): Item | null {
+  const k = key.toUpperCase();
+  return o.items.find((it) => it.ticket?.key === k) ?? null;
 }
 
-export function findSection(o: Outline, ref: string): Section | null {
-  if (ref.startsWith("#")) return o.sections.find((s) => !s.key && s.title === ref.slice(1)) ?? null;
-  return o.sections.find((s) => s.key === ref.toUpperCase()) ?? null;
+/** The ticket items over this one, nearest first (not the item itself). */
+export function ticketsAbove(it: Item): Item[] {
+  const out: Item[] = [];
+  for (let p = it.parent; p; p = p.parent) if (p.ticket) out.push(p);
+  return out;
 }
 
 // ---------- line operations (each returns new lines; parse again to see the result) ----------
@@ -289,10 +322,8 @@ function blockEnd(lines: string[], from: number, to: number): number {
 }
 
 export interface Place {
-  /** The new parent; null for the section's top level. */
+  /** The new parent; null for the top level. */
   parent: string | null;
-  /** Section ref (key or "#title") when parent is null. */
-  section?: string;
   /** Position among the parent's children; past the end (or omitted) appends. */
   index?: number;
 }
@@ -309,12 +340,10 @@ function slot(o: Outline, place: Place): { at: number; indent: number } {
     indent = siblings[0]?.indent ?? p.indent + 2;
     after = blockEnd(o.lines, p.line, p.end);
   } else {
-    const s = place.section === undefined ? null : findSection(o, place.section);
-    if (!s) throw new UserError(`No section ${place.section ?? "(none given)"}.`);
-    siblings = s.items;
-    indent = siblings[0]?.indent ?? 0;
-    // After the heading and any free text under it.
-    after = blockEnd(o.lines, s.line, s.end);
+    siblings = o.roots;
+    indent = 0;
+    after = o.lines.length;
+    while (after > 0 && !o.lines[after - 1].trim()) after--;
   }
   const i = place.index === undefined ? siblings.length : Math.max(0, Math.min(place.index, siblings.length));
   if (i < siblings.length) return { at: siblings[i].line, indent: siblings[i].indent };
@@ -344,10 +373,11 @@ export function insertItem(o: Outline, place: Place, item: NewItem): string[] {
   return spliceBlock([...o.lines], at, renderNew(item, indent));
 }
 
-/** Inserts lines at `at`; a block that would touch the next heading gets a blank line before it. */
+/** Inserts lines at `at`; a top item right after a title or other text gets a blank line before it. */
 function spliceBlock(lines: string[], at: number, block: string[]): string[] {
-  const nextIsHeading = at < lines.length && HEAD_RE.test(lines[at]);
-  lines.splice(at, 0, ...block, ...(nextIsHeading ? [""] : []));
+  const prev = at > 0 ? lines[at - 1] : "";
+  const afterText = prev.trim() !== "" && !ITEM_RE.test(prev) && !CTX_RE.test(prev) && /^- /.test(block[0] ?? "");
+  lines.splice(at, 0, ...(afterText ? [""] : []), ...block);
   return lines;
 }
 
@@ -378,26 +408,4 @@ export function moveItem(o: Outline, it: Item, place: Place): string[] {
   // Ids derived from text stay the same across the reparse; written ids too.
   const { at, indent } = slot(without, place);
   return spliceBlock(rest, at, reindent(block, 0, block.length, it.indent, indent));
-}
-
-export function addSection(o: Outline, key: string | null, title: string): string[] {
-  const lines = [...o.lines];
-  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  if (!lines.length) lines.push(OUTLINE_HEADER.trimEnd());
-  lines.push("", formatHeading(key, title, false));
-  return lines;
-}
-
-export function setSection(o: Outline, s: Section, patch: { title?: string; closed?: boolean }): string[] {
-  const lines = [...o.lines];
-  lines[s.line] = formatHeading(s.key, patch.title ?? s.title, patch.closed ?? s.closed);
-  return lines;
-}
-
-export function removeSection(o: Outline, s: Section): string[] {
-  const lines = [...o.lines];
-  let start = s.line;
-  while (start > 0 && !lines[start - 1].trim()) start--;
-  lines.splice(start, s.end - start);
-  return lines;
 }

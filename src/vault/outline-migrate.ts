@@ -6,12 +6,13 @@ import { formatLoopItem } from "./loopfields.ts";
 import { closedSteps } from "./loops.ts";
 import { notesText, readLog } from "./notes.ts";
 import { insertItem, outlineText, parseOutline, withIds } from "./outline.ts";
-import { apply, editModel, ensureSection, readModel } from "./outline-store.ts";
+import { apply, editModel, ensureTicket, readModel } from "./outline-store.ts";
 import type { Model } from "./outline-store.ts";
 import { listTickets } from "./store.ts";
 
 export interface MigrateResult {
-  sections: number;
+  /** Tickets in the outline. */
+  tickets: number;
   items: number;
   /** Closed steps brought in from the Logs. */
   closed: number;
@@ -24,10 +25,10 @@ function addClosedSteps(vault: string, m: Model): number {
   for (const t of listTickets(vault)) {
     const steps = closedSteps(readLog(notesText(t))).filter((c) => !m.o.byRef.has(c.id));
     if (!steps.length) continue;
-    ensureSection(m, t.key);
+    const home = ensureTicket(m, t.key).ref;
     steps.forEach((c, i) => {
       const text = formatLoopItem({ id: c.id, created: "", key: t.key, text: c.text, owner: "me", due: "", onExpiry: "", tag: c.tag, after: c.after, done: c.date }, null);
-      apply(m, insertItem(m.o, { parent: null, section: t.key, index: i }, { id: c.id, check: "x", text, context: [c.outcome] }));
+      apply(m, insertItem(m.o, { parent: home, index: i }, { id: c.id, check: "x", text, context: [c.outcome] }));
       n++;
     });
   }
@@ -40,7 +41,7 @@ export function migrateOutline(vault: string, opts: { dryRun?: boolean; log?: bo
     const closed = opts.log === false ? 0 : addClosedSteps(vault, m);
     const text = outlineText(withIds(m.o));
     const o = parseOutline(text);
-    return { sections: o.sections.length, items: o.items.length, closed, text };
+    return { tickets: o.items.filter((it) => it.ticket).length, items: o.items.length, closed, text };
   }
   const closed = editModel(vault, (m) => {
     const added = opts.log === false ? 0 : addClosedSteps(vault, m);
@@ -48,5 +49,5 @@ export function migrateOutline(vault: string, opts: { dryRun?: boolean; log?: bo
     return { result: added };
   }, () => "outline.md changed during the migration; run it again.");
   const o = readModel(vault).o;
-  return { sections: o.sections.length, items: o.items.length, closed };
+  return { tickets: o.items.filter((it) => it.ticket).length, items: o.items.length, closed };
 }

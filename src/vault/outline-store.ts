@@ -17,10 +17,10 @@ import { ConflictError, contentHash, readTextIfExists, writeFileAtomic } from ".
 import { ME, OPEN_RE, dueAt, fmtStamp, formatLoop, formatLoopItem, parseLoop, splitLeadingTag, withDone } from "./loopfields.ts";
 import type { Loop } from "./loopfields.ts";
 import {
-  NO_TICKET, OUTLINE_FILE, OUTLINE_HEADER, addSection, derivedId, insertItem, moveItem, outlineText, parseOutline, removeItem,
-  sectionRef, setItem, withIds,
+  NO_TICKET, OUTLINE_FILE, OUTLINE_HEADER, derivedId, insertItem, moveItem, newId, outlineText, parseOutline, removeItem, setItem,
+  ticketItem, ticketText, withIds,
 } from "./outline.ts";
-import type { Item, NewItem, Outline, Place, Section } from "./outline.ts";
+import type { Item, NewItem, Outline, Place } from "./outline.ts";
 import { loadState, saveState } from "./state.ts";
 import { findTicket } from "./store.ts";
 
@@ -78,7 +78,7 @@ export function loopOf(it: Item, opts: { closed?: boolean } = {}): Loop | null {
   const p = parseLoop(it.text);
   // An unreadable "by" ("someday") is kept as typed, but the item is not a loop.
   if (!p.due || !dueAt(p.due)) return null;
-  const loop: Loop = { ...p, id: it.ref, key: it.section.key, tag: p.tag ?? inheritedTag(it) };
+  const loop: Loop = { ...p, id: it.ref, key: it.key, tag: p.tag ?? inheritedTag(it) };
   loop.raw = formatLoop(loop);
   return loop;
 }
@@ -92,27 +92,25 @@ export function openLoops(o: Outline): Array<Loop & { item: Item }> {
   return out;
 }
 
-/** The section for a ticket (or the "No ticket" one), created at the end when missing. */
-export function ensureSection(m: Model, key: string | null): Section {
-  const found = key ? m.o.sections.find((s) => s.key === key) : m.o.sections.find((s) => !s.key && s.title === NO_TICKET);
+/** The item that stands for a ticket (or the "No ticket" one), added at the end of the top level when missing. */
+export function ensureTicket(m: Model, key: string | null): Item {
+  const found = key ? ticketItem(m.o, key) : m.o.roots.find((it) => it.check === null && it.text === NO_TICKET);
   if (found) return found;
-  const title = key ? findTicket(m.vault, key)?.title ?? "" : NO_TICKET;
-  apply(m, addSection(m.o, key, title));
-  return m.o.sections[m.o.sections.length - 1];
+  const id = newId(new Set(m.o.byRef.keys()));
+  const text = key ? ticketText(key, findTicket(m.vault, key)?.title ?? "") : NO_TICKET;
+  apply(m, insertItem(m.o, { parent: null }, { id, check: null, text }));
+  return m.o.byRef.get(id)!;
 }
 
-/** Where a new loop goes: right after the step it follows, under its branch, or at the end. */
-export function loopPlace(m: Model, s: Section, tag: string | null, after: string | null): Place {
+/** Where a new loop goes: right after the step it follows, under its branch, or at the end of its ticket. */
+export function loopPlace(m: Model, home: Item, tag: string | null, after: string | null): Place {
   const prev = after ? m.o.byRef.get(after) : undefined;
-  if (prev && prev.section === s) {
-    const siblings = prev.parent ? prev.parent.children : s.items;
-    return { parent: prev.parent?.ref ?? null, section: sectionRef(s), index: siblings.indexOf(prev) + 1 };
-  }
+  if (prev && prev.key === home.key && prev.parent) return { parent: prev.parent.ref, index: prev.parent.children.indexOf(prev) + 1 };
   if (tag) {
-    const branch = m.o.items.find((it) => it.section === s && it.text === `#${tag}`);
+    const branch = m.o.items.find((it) => it.home === home && it.text === `#${tag}`);
     if (branch) return { parent: branch.ref };
   }
-  return { parent: null, section: sectionRef(s) };
+  return { parent: home.ref };
 }
 
 /** Replaces the outline's lines in memory and parses them again. */
@@ -124,17 +122,17 @@ export function apply(m: Model, lines: string[]): void {
 /** Writes a loop's fields into its item, moving it when its ticket changed. */
 export function setLoop(m: Model, it: Item, l: Loop): void {
   const ref = it.ref;
-  if (l.key !== it.section.key) {
-    const s = ensureSection(m, l.key);
-    apply(m, moveItem(m.o, m.o.byRef.get(ref)!, { parent: null, section: sectionRef(s) }));
+  if (l.key !== it.key) {
+    const home = ensureTicket(m, l.key);
+    apply(m, moveItem(m.o, m.o.byRef.get(ref)!, { parent: home.ref }));
   }
   const now = m.o.byRef.get(ref)!;
   apply(m, setItem(m.o, now, { text: formatLoopItem(l, inheritedTag(now)) }));
 }
 
 export function addLoopItem(m: Model, l: Loop, place?: Place): Item {
-  const s = ensureSection(m, l.key);
-  const where = place ?? loopPlace(m, s, l.tag, l.after);
+  const home = ensureTicket(m, l.key);
+  const where = place ?? loopPlace(m, home, l.tag, l.after);
   const parent = where.parent ? m.o.byRef.get(where.parent) ?? null : null;
   const item: NewItem = { id: l.id, check: " ", text: formatLoopItem(l, parent ? ownTag(parent.text) ?? inheritedTag(parent) : null) };
   apply(m, insertItem(m.o, where, item));

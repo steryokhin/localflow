@@ -1,10 +1,10 @@
 // Lenses over the outline: one tree, several ways to look at it. A lens picks items; every picked
-// item is shown with all its parents and its section heading, the rest is hidden. Plus the terminal
+// item is shown with all its parents, the rest is hidden. Plus the terminal
 // rendering of the tree and of its history.
 
 import { ME, dueAt, fmtDay } from "../vault/loopfields.ts";
-import { ancestors, sectionRef } from "../vault/outline.ts";
-import type { Item, Outline, Section } from "../vault/outline.ts";
+import { ancestors } from "../vault/outline.ts";
+import type { Item, Outline } from "../vault/outline.ts";
 import type { OutlineEvent } from "../vault/outline-history.ts";
 import { loopOf } from "../vault/outline-store.ts";
 import { fmtDue, fmtSpan, lastWorkingDay } from "./loops.ts";
@@ -15,7 +15,7 @@ export type Lens = (typeof LENSES)[number];
 export interface LensOptions {
   /** Items checked off since the last working day (from the history), for "standup". */
   checkedSince?: Set<string>;
-  /** Only this ticket's section. */
+  /** Only this ticket: its item and everything under it. */
   key?: string;
   /** Text search: items whose text or context contains it (case-insensitive). */
   query?: string;
@@ -23,9 +23,16 @@ export interface LensOptions {
 
 const endOfDay = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
 
-/** Done, or under something done. */
+/** Done, or under something done (a checked task or a closed ticket). */
 function doneish(it: Item): boolean {
-  for (let p: Item | null = it; p; p = p.parent) if (p.check === "x") return true;
+  for (let p: Item | null = it; p; p = p.parent) if (p.check === "x" || p.ticket?.closed) return true;
+  return false;
+}
+
+/** The item is the ticket's or under it (nested tickets included). */
+export function under(it: Item, key: string): boolean {
+  const k = key.toUpperCase();
+  for (let p: Item | null = it; p; p = p.parent) if (p.ticket?.key === k) return true;
   return false;
 }
 
@@ -36,7 +43,7 @@ export function lensMatch(it: Item, lens: Lens, now: Date, opts: LensOptions = {
     case "all":
       return true;
     case "active":
-      return !doneish(it) && !it.section.closed;
+      return !doneish(it);
     case "today":
       return !!loop && at <= endOfDay(now);
     case "waiting":
@@ -50,35 +57,24 @@ export function lensMatch(it: Item, lens: Lens, now: Date, opts: LensOptions = {
 
 export interface Visible {
   items: Set<string>;
-  sections: Set<string>;
   /** How many items matched the lens itself (not counting the parents shown with them). */
   matched: number;
 }
 
-/** What a lens shows: the matches, their parents and their sections. */
+/** What a lens shows: the matches and their parents. */
 export function visibleFor(o: Outline, lens: Lens, now: Date, opts: LensOptions = {}): Visible {
   const items = new Set<string>();
-  const sections = new Set<string>();
   const q = opts.query?.trim().toLowerCase();
   let matched = 0;
   for (const it of o.items) {
-    if (opts.key && it.section.key !== opts.key.toUpperCase()) continue;
+    if (opts.key && !under(it, opts.key)) continue;
     if (!lensMatch(it, lens, now, opts)) continue;
     if (q && !`${it.text}\n${it.context.join("\n")}`.toLowerCase().includes(q)) continue;
     matched++;
     items.add(it.ref);
     for (const a of ancestors(it)) items.add(a.ref);
-    sections.add(sectionRef(it.section));
   }
-  // Empty sections (a ticket with nothing written yet) show in the views that are about open work.
-  if (!q && (lens === "all" || lens === "active")) {
-    for (const s of o.sections) {
-      if (opts.key && s.key !== opts.key.toUpperCase()) continue;
-      if (lens === "active" && s.closed) continue;
-      if (lens === "all" || !s.items.length) sections.add(sectionRef(s));
-    }
-  }
-  return { items, sections, matched };
+  return { items, matched };
 }
 
 export function standupSince(now: Date): string {
@@ -109,32 +105,30 @@ function displayText(it: Item, now: Date): string {
 
 const GLYPH: Record<string, string> = { " ": "○", x: "✓", null: "•" };
 
+function glyph(it: Item): string {
+  return it.ticket ? (it.ticket.closed ? "◇" : "◆") : GLYPH[String(it.check)];
+}
+
 export function renderOutline(o: Outline, now: Date, opts: { visible?: Visible; ids?: boolean; context?: boolean } = {}): string {
   const out: string[] = [];
   const show = (it: Item): boolean => !opts.visible || opts.visible.items.has(it.ref);
   const walk = (items: Item[], depth: number): void => {
     for (const it of items) {
       if (!show(it)) continue;
-      const pad = "  ".repeat(depth + 1);
-      out.push(`${pad}${GLYPH[String(it.check)]} ${displayText(it, now)}${opts.ids !== false ? `  ^${it.ref}` : ""}${loopNote(it, now)}`);
+      const pad = "  ".repeat(depth);
+      // A top-level item starts a block: a blank line before it reads better.
+      if (depth === 0 && out.length) out.push("");
+      out.push(`${pad}${glyph(it)} ${displayText(it, now)}${opts.ids !== false ? `  ^${it.ref}` : ""}${loopNote(it, now)}`);
       if (opts.context !== false) for (const c of it.context) out.push(`${pad}    > ${c}`);
       walk(it.children, depth + 1);
     }
   };
-  for (const s of o.sections) {
-    if (opts.visible && !opts.visible.sections.has(sectionRef(s))) continue;
-    out.push(`## ${s.key ? `${s.key}${s.title ? ` · ${s.title}` : ""}` : s.title}${s.closed ? " ✓" : ""}`);
-    const before = out.length;
-    walk(s.items, 0);
-    if (out.length === before) out.push("  (nothing yet)");
-    out.push("");
-  }
+  walk(o.roots, 0);
   return out.join("\n").trimEnd() + "\n";
 }
 
 const KIND_MARK: Record<string, string> = {
-  added: "+", removed: "−", checked: "✓", unchecked: "↺", edited: "✎", moved: "→", note: ">", task: "○",
-  "section-added": "#", "section-closed": "✓", "section-reopened": "↺", "section-removed": "−", "section-renamed": "✎",
+  added: "+", removed: "−", checked: "✓", unchecked: "↺", edited: "✎", moved: "→", note: ">", task: "○", closed: "◇", reopened: "◆",
 };
 
 export function eventLine(e: OutlineEvent): string {
@@ -149,8 +143,10 @@ export function eventLine(e: OutlineEvent): string {
       return `${mark} note on "${e.text}": ${e.was ? "edited" : "added"}`;
     case "added":
       return `${mark} ${e.text}${under}`;
-    case "section-renamed":
-      return `${mark} ${e.text}   (was: ${e.was})`;
+    case "closed":
+      return `${mark} ${e.text.replace(/ ✓$/, "")} closed`;
+    case "reopened":
+      return `${mark} ${e.text} reopened`;
     default:
       return `${mark} ${e.text}`;
   }
@@ -172,6 +168,8 @@ export function renderHistory(title: string, events: OutlineEvent[]): string {
   return out.join("\n") + "\n";
 }
 
-export function sectionTitle(s: Section): string {
-  return s.key ? `${s.key}${s.title ? ` · ${s.title}` : ""}` : s.title;
+/** Where an item is, for a one-line answer: its ticket (or its top item) and its parent. */
+export function placeLine(it: Item): string {
+  const anc = ancestors(it);
+  return anc.length ? anc.map((a) => a.text).join(" › ") : "the top level";
 }

@@ -2,11 +2,12 @@
 // history of an item or a ticket, what changed day by day, the migration from loops.md, and small
 // edits by id for the agent (add, check, edit, note, move, rm).
 
-import { LENSES, eventLine, renderHistory, renderOutline, sectionTitle, standupSince, visibleFor } from "./render/outline.ts";
+import { LENSES, eventLine, placeLine, renderHistory, renderOutline, standupSince, visibleFor } from "./render/outline.ts";
 import type { Lens } from "./render/outline.ts";
+import { refreshInbox } from "./render/inbox.ts";
 import { UserError } from "./util.ts";
 import { fmtDay, normalizeId } from "./vault/loopfields.ts";
-import { OUTLINE_FILE, findSection } from "./vault/outline.ts";
+import { OUTLINE_FILE, ticketItem } from "./vault/outline.ts";
 import { changesByDay, checkedSince, itemHistory, outlineAt, ticketHistory } from "./vault/outline-history.ts";
 import { applyOps } from "./vault/outline-ops.ts";
 import type { Op, PlaceIn } from "./vault/outline-ops.ts";
@@ -56,7 +57,7 @@ export function cmdOutlineView(vault: string, opts: OutlineViewOptions): void {
     o = v.o;
     title = `As of the end of ${day}${v.sha ? ` (commit ${v.sha.slice(0, 10)}, ${v.date.slice(0, 16).replace("T", " ")})` : ""}`;
   }
-  if (!o.sections.length) {
+  if (!o.items.length) {
     out(`${OUTLINE_FILE} is empty. Add a loop (lf loop …), an item (lf outline add …), or move loops.md in: lf outline --migrate`);
     return;
   }
@@ -79,8 +80,8 @@ export function cmdOutlineHistory(vault: string, target: string): void {
   const t = target.trim();
   if (KEY_ONLY_RE.test(t.toUpperCase()) && /-\d+$/.test(t)) {
     const key = t.toUpperCase();
-    const s = readModel(vault).o.sections.find((x) => x.key === key);
-    write(renderHistory(`${s ? sectionTitle(s) : key} — history`, ticketHistory(vault, key, now)));
+    const t = ticketItem(readModel(vault).o, key);
+    write(renderHistory(`${t ? t.text : key} — history`, ticketHistory(vault, key, now)));
     return;
   }
   const id = normalizeId(t);
@@ -121,7 +122,7 @@ export function cmdOutlineMigrate(vault: string, opts: { dryRun?: boolean; log?:
     out(`dry run: ${r.items} items (${r.closed} closed steps from the Logs); nothing written.`);
     return;
   }
-  out(`${OUTLINE_FILE}: ${r.sections} sections, ${r.items} items (${r.closed} closed steps from the Logs). loops.md now follows it.`);
+  out(`${OUTLINE_FILE}: ${r.tickets} tickets, ${r.items} items (${r.closed} closed steps from the Logs). loops.md now follows it.`);
 }
 
 // ---------- small edits for the agent ----------
@@ -138,10 +139,11 @@ function placeOf(vault: string, p: EditPlace): PlaceIn {
   if (p.under) return { parent: normalizeId(p.under), index: p.top ? 0 : undefined };
   if (p.key) {
     const key = p.key.toUpperCase();
-    if (!findSection(readModel(vault).o, key)) applyOps(vault, [{ op: "section", key }], new Date());
-    return { parent: null, section: key, index: p.top ? 0 : undefined };
+    if (!ticketItem(readModel(vault).o, key)) applyOps(vault, [{ op: "ticket", key }], new Date());
+    return { parent: ticketItem(readModel(vault).o, key)!.ref, index: p.top ? 0 : undefined };
   }
-  throw new UserError("Where? --key KEY, --under ID or --after ID.");
+  if (p.top) return { parent: null };
+  throw new UserError("Where? --key KEY, --under ID, --after ID or --top (the top level).");
 }
 
 export function cmdOutlineEdit(vault: string, action: string, args: string[], opts: EditPlace & { note?: boolean }): void {
@@ -182,13 +184,28 @@ export function cmdOutlineEdit(vault: string, action: string, args: string[], op
     case "rm":
       ops = [{ op: "delete", id: id() }];
       break;
+    case "ticket": {
+      // lf outline ticket ID          — that item becomes a new local ticket
+      // lf outline ticket KEY [place] — an existing ticket into the outline
+      // lf outline ticket "title" [place] — a new local ticket
+      const arg = text(0);
+      if (!arg) throw new UserError('Usage: lf outline ticket (ID | KEY | "new ticket title") [--under ID | --after ID | --top]');
+      const hasPlace = opts.under || opts.after || opts.top;
+      const place = hasPlace ? placeOf(vault, { ...opts, key: undefined }) : { parent: null };
+      if (args.length === 1 && readModel(vault).o.byRef.has(normalizeId(arg))) ops = [{ op: "ticket", id: normalizeId(arg) }];
+      else if (KEY_ONLY_RE.test(arg.toUpperCase()) && /-\d+$/.test(arg)) ops = [{ op: "ticket", key: arg, place, temp: "new" }];
+      else ops = [{ op: "ticket", title: arg, place, temp: "new" }];
+      break;
+    }
     default:
       throw new UserError(`Unknown: lf outline ${action}. See lf help.`);
   }
   const r = applyOps(vault, ops, now);
+  if (r.created.length) refreshInbox(vault);
+  for (const k of r.created) out(`created local ticket ${k}`);
   const m = readModel(vault);
   const ref = r.ids.new ?? (args[0] ? normalizeId(args[0]) : "");
   const it = m.o.byRef.get(ref);
   if (action === "rm") out(`removed ^${ref} (and what was under it); the vault's git keeps it`);
-  else if (it) out(`${action === "add" ? "added" : action === "move" ? "moved" : "updated"} ^${it.ref} under ${sectionTitle(it.section)}${it.parent ? ` › ${it.parent.text}` : ""}: ${it.check === "x" ? "✓ " : ""}${it.text}`);
+  else if (it) out(`${action === "add" || action === "ticket" ? "added" : action === "move" ? "moved" : "updated"} ^${it.ref} under ${placeLine(it)}: ${it.check === "x" ? "✓ " : ""}${it.text}`);
 }

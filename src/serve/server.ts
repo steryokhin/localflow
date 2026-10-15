@@ -402,7 +402,7 @@ async function api(
   }
   if (route === "POST /api/outline/migrate") {
     const r = migrateOutline(vault);
-    return { ...r, message: `outline.md: ${r.sections} sections, ${r.items} items (${r.closed} closed steps from the Logs)` };
+    return { ...r, message: `outline.md: ${r.tickets} tickets, ${r.items} items (${r.closed} closed steps from the Logs)` };
   }
   if (route === "GET /api/outline/days") return { days: outlineDays(vault) };
   if (route === "GET /api/outline/day") return outlineDay(vault, url.searchParams.get("day") ?? "");

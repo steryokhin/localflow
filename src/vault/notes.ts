@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { readTextIfExists, writeFileAtomic } from "../util.ts";
-import { setFrontmatterKeys } from "./frontmatter.ts";
+import { removeFrontmatterKeys, setFrontmatterKeys } from "./frontmatter.ts";
 import { NOTES_FILE, notesStub } from "./store.ts";
 import type { Ticket } from "./store.ts";
 
@@ -68,6 +68,18 @@ export function appendTicketLog(t: Ticket, stamp: string, text: string): void {
 /** `tracked:` in notes.md: whether the ticket is on the loops board and in the "Tracking" group. */
 export function setTracked(t: Ticket, tracked: boolean): void {
   writeFileAtomic(path.join(t.dir, NOTES_FILE), setFrontmatterKeys(notesText(t), { tracked }));
+}
+
+/** The ticket's `parent:` in notes.md (the ticket it sits under), or null. */
+export function parentKey(t: Ticket): string | null {
+  const p = t.notes.parent;
+  return typeof p === "string" && p.trim() ? p.trim().toUpperCase() : null;
+}
+
+/** Sets or (with null) removes `parent:` in notes.md. */
+export function setParentKey(t: Ticket, parent: string | null): void {
+  const text = notesText(t);
+  writeFileAtomic(path.join(t.dir, NOTES_FILE), parent ? setFrontmatterKeys(text, { parent }) : removeFrontmatterKeys(text, ["parent"]));
 }
 
 export function isTracked(t: Ticket): boolean {

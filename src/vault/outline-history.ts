@@ -9,8 +9,8 @@ import path from "node:path";
 import { readTextIfExists } from "../util.ts";
 import { commitPaths, fileVersions, git, head } from "./git.ts";
 import { doneOf, fmtDay } from "./loopfields.ts";
-import { OUTLINE_FILE, ancestors, parseOutline, sectionRef } from "./outline.ts";
-import type { Item, Outline, Section } from "./outline.ts";
+import { OUTLINE_FILE, ancestors, parseOutline } from "./outline.ts";
+import type { Item, Outline } from "./outline.ts";
 import { LOOPS_FILE } from "./outline-store.ts";
 
 export const OUTLINE_COMMIT_PREFIX = "outline";
@@ -70,17 +70,18 @@ export function outlineAt(vault: string, day: string, now = new Date()): Version
 
 // ---------- changes between two versions ----------
 
-export type EventKind = "added" | "removed" | "checked" | "unchecked" | "edited" | "moved" | "note" | "task" | "section-added" | "section-closed" | "section-reopened" | "section-removed" | "section-renamed";
+export type EventKind = "added" | "removed" | "checked" | "unchecked" | "edited" | "moved" | "note" | "task" | "closed" | "reopened";
 
 export interface OutlineEvent {
   date: string;
   sha: string | null;
   subject: string;
   kind: EventKind;
-  /** The item's id, or the section's ref for section events. */
+  /** The item's id. */
   ref: string;
+  /** The ticket the item belongs to (the nearest ticket item up the tree). */
   key: string | null;
-  /** The section's heading text. */
+  /** Where it is: the ticket's line, or the top item it is under. */
   section: string;
   text: string;
   /** The text before an edit, the old place before a move. */
@@ -91,8 +92,15 @@ export interface OutlineEvent {
   path: string[];
 }
 
-const where = (it: Item): string => [it.section.key ?? it.section.title, ...ancestors(it).map((a) => a.text)].join(" › ");
-const heading = (s: Section): string => (s.key ? `${s.key}${s.title ? ` · ${s.title}` : ""}` : s.title);
+const where = (it: Item): string => ancestors(it).map((a) => a.text).join(" › ") || "top level";
+
+/** The line an item is shown under: its ticket, else its top item, else itself. */
+function sectionOf(it: Item): string {
+  if (it.home) return it.home.text.replace(/ ✓$/, "");
+  let root = it;
+  while (root.parent) root = root.parent;
+  return root.text;
+}
 
 /** What changed from `a` to `b`, item by item. */
 export function diffOutlines(a: Outline | null, b: Outline, at: { date: string; sha: string | null; subject: string }): OutlineEvent[] {
@@ -100,45 +108,32 @@ export function diffOutlines(a: Outline | null, b: Outline, at: { date: string; 
   const ev = (kind: EventKind, it: Item, extra: Partial<OutlineEvent> = {}): void => {
     const anc = ancestors(it);
     out.push({
-      ...at, kind, ref: it.ref, key: it.section.key, section: heading(it.section), text: it.text,
+      ...at, kind, ref: it.ref, key: it.key, section: sectionOf(it), text: it.text,
       parents: anc.map((p) => p.ref), path: anc.map((p) => p.text), ...extra,
     });
   };
-  const sec = (kind: EventKind, s: Section, was?: string): void => {
-    out.push({ ...at, kind, ref: sectionRef(s), key: s.key, section: heading(s), text: heading(s), parents: [], path: [], ...(was ? { was } : {}) });
-  };
-  const oldSections = new Map((a?.sections ?? []).map((s) => [sectionRef(s), s] as const));
-  for (const s of b.sections) {
-    const old = oldSections.get(sectionRef(s));
-    if (!old) sec("section-added", s);
-    else {
-      if (old.closed !== s.closed) sec(s.closed ? "section-closed" : "section-reopened", s);
-      if (old.title !== s.title && s.key) sec("section-renamed", s, old.title);
-    }
-  }
-  const newSections = new Set(b.sections.map(sectionRef));
-  for (const s of a?.sections ?? []) if (!newSections.has(sectionRef(s))) sec("section-removed", s);
-
   for (const it of b.items) {
     const old = a?.byRef.get(it.ref);
     if (!old) {
       ev("added", it);
       continue;
     }
+    if (old.ticket && it.ticket && old.ticket.closed !== it.ticket.closed) ev(it.ticket.closed ? "closed" : "reopened", it);
     if (old.check !== it.check) {
       if (it.check === "x") ev("checked", it);
       else if (old.check === "x" && it.check === " ") ev("unchecked", it);
       else ev("task", it, { was: old.check === null ? "note" : "task" });
     }
-    // Checking off stamps "done …" on the line: that is the check, not a rewording.
-    if (doneOf(old.text).text !== doneOf(it.text).text) ev("edited", it, { was: old.text });
+    // Checking off stamps "done …" on the line, closing a ticket adds " ✓": that is the check, not a rewording.
+    const bare = (x: Item): string => doneOf(x.text).text.replace(/ ✓$/, "");
+    if (bare(old) !== bare(it)) ev("edited", it, { was: old.text });
     if (old.context.join("\n") !== it.context.join("\n")) ev("note", it, { was: old.context.join("\n") });
-    if ((old.parent?.ref ?? null) !== (it.parent?.ref ?? null) || sectionRef(old.section) !== sectionRef(it.section)) ev("moved", it, { was: where(old) });
+    if ((old.parent?.ref ?? null) !== (it.parent?.ref ?? null)) ev("moved", it, { was: where(old) });
   }
   for (const it of a?.items ?? []) {
     if (!b.byRef.has(it.ref)) {
       const anc = ancestors(it);
-      out.push({ ...at, kind: "removed", ref: it.ref, key: it.section.key, section: heading(it.section), text: it.text, parents: anc.map((p) => p.ref), path: anc.map((p) => p.text) });
+      out.push({ ...at, kind: "removed", ref: it.ref, key: it.key, section: sectionOf(it), text: it.text, parents: anc.map((p) => p.ref), path: anc.map((p) => p.text) });
     }
   }
   return out;

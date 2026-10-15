@@ -61,7 +61,10 @@ Outline (outline.md: tickets → steps → subtasks → waits, one tree; every c
                                   what changed, day by day (default: the last 7 days)
   outline --migrate [--dry-run] [--no-log]
                                   move loops.md into outline.md (closed steps from the Logs too)
-  outline add "TEXT" (--key KEY | --under ID | --after ID) [--top] [--note]
+  outline add "TEXT" (--key KEY | --under ID | --after ID | --top) [--note]
+                                  --top alone: the top level; with --key/--under: first under it
+  outline ticket ID | KEY | "TITLE" [--under ID | --after ID | --top]
+                                  item → new local ticket; an existing ticket; a new local ticket
   outline check ID ["outcome"] | uncheck ID | edit ID "TEXT" | note ID "TEXT" | rm ID
   outline move ID (--key KEY | --under ID | --after ID) [--top]
                                   edits by id; a task with "by WHEN" is a loop (checking it off logs it)

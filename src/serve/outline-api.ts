@@ -4,7 +4,7 @@
 import { lastWorkingDay } from "../render/loops.ts";
 import { UserError } from "../util.ts";
 import { ME, doneOf, dueAt, fmtDay, normalizeId } from "../vault/loopfields.ts";
-import { ownHash, sectionRef } from "../vault/outline.ts";
+import { ownHash } from "../vault/outline.ts";
 import type { Item, Outline } from "../vault/outline.ts";
 import { allEvents, checkedSince, itemHistory, outlineAt, ticketHistory } from "../vault/outline-history.ts";
 import type { OutlineEvent } from "../vault/outline-history.ts";
@@ -12,6 +12,8 @@ import { applyOps } from "../vault/outline-ops.ts";
 import type { Op } from "../vault/outline-ops.ts";
 import { loopOf, readModel } from "../vault/outline-store.ts";
 import { listTickets } from "../vault/store.ts";
+import type { Ticket } from "../vault/store.ts";
+import { refreshInbox } from "../render/inbox.ts";
 import { loadConfig } from "../config.ts";
 
 export interface ItemView {
@@ -25,6 +27,8 @@ export interface ItemView {
   own: string;
   /** When it was checked off ("done …" on its line), or null. */
   done: string | null;
+  /** Set when the item stands for a ticket; `exists` is false when the vault has no such ticket. */
+  ticket: { key: string; title: string; closed: boolean; exists: boolean; status: string | null; jiraStatus: string | null } | null;
   loop: {
     text: string;
     owner: string;
@@ -39,23 +43,14 @@ export interface ItemView {
   children: ItemView[];
 }
 
-export interface SectionView {
-  ref: string;
-  key: string | null;
-  title: string;
-  closed: boolean;
-  /** The ticket behind the heading (local status), when the vault has it. */
-  ticket: { title: string; status: string; jiraStatus: string | null } | null;
-  items: ItemView[];
-}
-
 export interface OutlineView {
   /** Hash of outline.md + loops.md: changes on every write, by anyone. */
   version: string;
   exists: boolean;
-  sections: SectionView[];
+  /** The top-level items. */
+  items: ItemView[];
   conflicts: string[];
-  /** Tickets that have no section yet, for "add a section". */
+  /** Tickets that are not in the outline yet, for "add a ticket". */
   tickets: Array<{ key: string; title: string; status: string }>;
   /** Items checked off since the last working day (the standup lens). */
   checkedSince: string[];
@@ -63,33 +58,30 @@ export interface OutlineView {
   now: string;
 }
 
-function itemView(it: Item): ItemView {
+function itemView(it: Item, tickets: Map<string, Ticket>): ItemView {
   const l = loopOf(it, { closed: true });
+  const t = it.ticket ? tickets.get(it.ticket.key) : undefined;
   return {
     id: it.ref, written: it.id !== null, check: it.check, text: it.text, context: it.context, own: ownHash(it), done: doneOf(it.text).done,
+    ticket: it.ticket ? {
+      ...it.ticket, exists: !!t, status: t?.status ?? null, jiraStatus: t && typeof t.fm.jira_status === "string" ? t.fm.jira_status : null,
+    } : null,
     loop: l ? {
       text: l.text, owner: l.owner, due: l.due, dueAt: dueAt(l.due)?.getTime() ?? null, onExpiry: l.onExpiry, tag: l.tag, after: l.after, created: l.created,
     } : null,
-    children: it.children.map(itemView),
+    children: it.children.map((c) => itemView(c, tickets)),
   };
 }
 
-export function sectionsView(vault: string, o: Outline): SectionView[] {
+export function treeView(vault: string, o: Outline): ItemView[] {
   const tickets = new Map(listTickets(vault).map((t) => [t.key, t] as const));
-  return o.sections.map((s) => {
-    const t = s.key ? tickets.get(s.key) : undefined;
-    return {
-      ref: sectionRef(s), key: s.key, title: s.title, closed: s.closed,
-      ticket: t ? { title: t.title, status: t.status, jiraStatus: typeof t.fm.jira_status === "string" ? t.fm.jira_status : null } : null,
-      items: s.items.map(itemView),
-    };
-  });
+  return o.roots.map((it) => itemView(it, tickets));
 }
 
 export function outlineView(vault: string, now = new Date()): OutlineView {
   const m = readModel(vault);
   const since = fmtDay(lastWorkingDay(now));
-  const inOutline = new Set(m.o.sections.map((s) => s.key).filter(Boolean));
+  const inOutline = new Set(m.o.items.map((it) => it.ticket?.key).filter(Boolean));
   let checked: string[] = [];
   try {
     checked = [...checkedSince(vault, since, now)];
@@ -99,7 +91,7 @@ export function outlineView(vault: string, now = new Date()): OutlineView {
   return {
     version: `${m.outlineHash}.${m.loopsHash}`,
     exists: m.outlineExists,
-    sections: sectionsView(vault, m.o),
+    items: treeView(vault, m.o),
     conflicts: [...m.conflicts],
     tickets: listTickets(vault)
       .filter((t) => !inOutline.has(t.key) && t.status !== "archived")
@@ -110,9 +102,10 @@ export function outlineView(vault: string, now = new Date()): OutlineView {
   };
 }
 
-export function outlineOps(vault: string, ops: unknown, now = new Date()): { ids: Record<string, string>; removed: Record<string, unknown>; view: OutlineView } {
+export function outlineOps(vault: string, ops: unknown, now = new Date()): { ids: Record<string, string>; removed: Record<string, unknown>; created: string[]; view: OutlineView } {
   if (!Array.isArray(ops)) throw new UserError('"ops" must be a list of operations.');
   const r = applyOps(vault, ops as Op[], now, { workdayEnd: loadConfig(vault).loops?.workdayEnd });
+  if (r.created.length) refreshInbox(vault);
   return { ...r, view: outlineView(vault, now) };
 }
 
@@ -148,12 +141,12 @@ export function outlineDays(vault: string, now = new Date()): Array<{ day: strin
 }
 
 /** The outline at the end of a day, and what changed that day (to mark it). */
-export function outlineDay(vault: string, day: string, now = new Date()): { day: string; sections: SectionView[]; events: OutlineEvent[]; sha: string | null } {
+export function outlineDay(vault: string, day: string, now = new Date()): { day: string; items: ItemView[]; events: OutlineEvent[]; sha: string | null } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new UserError("day is YYYY-MM-DD");
   const v = outlineAt(vault, day, now);
   if (!v) throw new UserError(`No outline on ${day}: the history starts with the first commit of outline.md.`);
   const events = allEvents(vault, now).filter((e) => e.date.slice(0, 10) === day);
-  return { day, sections: sectionsView(vault, v.o), events, sha: v.sha };
+  return { day, items: treeView(vault, v.o), events, sha: v.sha };
 }
 
 export { ME };

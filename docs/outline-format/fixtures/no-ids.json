@@ -1,9 +1,14 @@
 [
   {
-    "key": "A-1",
-    "title": "Hand-written",
-    "closed": false,
-    "items": [
+    "id": null,
+    "check": null,
+    "text": "A-1 · Hand-written",
+    "ticket": {
+      "key": "A-1",
+      "title": "Hand-written",
+      "closed": false
+    },
+    "children": [
       {
         "id": null,
         "check": " ",

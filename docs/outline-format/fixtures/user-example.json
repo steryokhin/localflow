@@ -1,48 +1,77 @@
 [
   {
-    "key": "PROJ-1",
-    "title": "Login crash on swipe",
-    "closed": false,
-    "items": [
+    "id": "p2q3",
+    "check": null,
+    "text": "Mobile",
+    "children": [
       {
-        "id": "k3f9",
-        "check": "x",
-        "text": "reproduce on iOS 26"
-      },
-      {
-        "id": "m4p2",
-        "check": " ",
-        "text": "research issue #123",
+        "id": "a7c4",
+        "check": null,
+        "text": "PROJ-1 · Login crash on swipe",
+        "ticket": {
+          "key": "PROJ-1",
+          "title": "Login crash on swipe",
+          "closed": false
+        },
         "children": [
           {
-            "id": "a2b3",
+            "id": "k3f9",
             "check": "x",
-            "text": "call Jim"
+            "text": "reproduce on iOS 26 · done 2026-10-13 10:20"
           },
           {
-            "id": "c4d5",
-            "check": "x",
-            "text": "discuss with Tom",
-            "context": [
-              "Tom: the crash is in the swipe handler, not the cache"
+            "id": "m4p2",
+            "check": " ",
+            "text": "research issue #123",
+            "children": [
+              {
+                "id": "a2b3",
+                "check": "x",
+                "text": "call Jim"
+              },
+              {
+                "id": "c4d5",
+                "check": "x",
+                "text": "discuss with Tom",
+                "context": [
+                  "Tom: the crash is in the swipe handler, not the cache"
+                ]
+              },
+              {
+                "id": "e6f7",
+                "check": " ",
+                "text": "#android review",
+                "children": [
+                  {
+                    "id": "g8h9",
+                    "check": "x",
+                    "text": "ask Jim to review",
+                    "children": [
+                      {
+                        "id": "L7",
+                        "check": " ",
+                        "text": "wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios"
+                      }
+                    ]
+                  }
+                ]
+              }
             ]
           },
           {
-            "id": "e6f7",
-            "check": " ",
-            "text": "#android review",
+            "id": "b5d6",
+            "check": null,
+            "text": "PROJ-3 · Crash in the image cache",
+            "ticket": {
+              "key": "PROJ-3",
+              "title": "Crash in the image cache",
+              "closed": false
+            },
             "children": [
               {
-                "id": "g8h9",
-                "check": "x",
-                "text": "ask Jim to review",
-                "children": [
-                  {
-                    "id": "L7",
-                    "check": " ",
-                    "text": "wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios"
-                  }
-                ]
+                "id": "h3j4",
+                "check": " ",
+                "text": "check the eviction policy"
               }
             ]
           }
@@ -51,15 +80,25 @@
     ]
   },
   {
-    "key": "PROJ-2",
-    "title": "Payments",
-    "closed": true,
-    "items": [
+    "id": "r6s7",
+    "check": null,
+    "text": "PROJ-2 · Payments ✓",
+    "ticket": {
+      "key": "PROJ-2",
+      "title": "Payments",
+      "closed": true
+    },
+    "children": [
       {
         "id": "j2k3",
         "check": "x",
         "text": "ship the fix"
       }
     ]
+  },
+  {
+    "id": "t8u9",
+    "check": " ",
+    "text": "a loose task at the top level"
   }
 ]
