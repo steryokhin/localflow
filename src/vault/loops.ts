@@ -159,9 +159,18 @@ export function closeLoop(vault: string, query: string, outcome: string, now: Da
     m.summary.push(`done ${l.id}: ${oneLine(outcome) || "done"}`);
     return { result: strip(l), target: l.raw };
   }, refused);
+  return { loop, loggedTo: logClosed(vault, loop, outcome, now) };
+}
+
+/** The Log line of a closed loop: "outcome (L3 #android, after L2: text, from Tom)". Returns where it went. */
+export function logClosed(vault: string, loop: Loop, outcome: string, now: Date): string {
   const who = loop.owner === ME ? "" : `, from ${loop.owner}`;
-  const loggedTo = logLine(vault, loop, `${oneLine(outcome) || "done"} (${stepRef(loop)}: ${loop.text}${who})`, now);
-  return { loop, loggedTo };
+  return logLine(vault, loop, `${oneLine(outcome) || "done"} (${stepRef(loop)}: ${loop.text}${who})`, now);
+}
+
+/** A loop checked off by mistake and opened again (the outline editor). */
+export function logReopened(vault: string, loop: Loop, now: Date): string {
+  return logLine(vault, loop, `reopened ${loop.id}: ${loop.text}`, now);
 }
 
 /** Moves a loop's deadline (and optionally its "else"); the ticket's Log records what it was. */

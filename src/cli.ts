@@ -4,7 +4,10 @@ import {
   cmdNote, cmdOpen, cmdPath, cmdImport, cmdRepo, cmdReport, cmdSeen, cmdServe, cmdStandup, cmdStart, cmdStatus, cmdSync, cmdTrack,
   cmdUnlink, cmdWatch,
 } from "./commands.ts";
+import { cmdOutlineDays, cmdOutlineEdit, cmdOutlineHistory, cmdOutlineMigrate, cmdOutlineView } from "./commands-outline.ts";
 import { resolveVault } from "./config.ts";
+import { commitOutline } from "./vault/outline-history.ts";
+import { outlineHooks } from "./vault/outline-store.ts";
 import { UserError } from "./util.ts";
 
 const HELP = `Local Flow — local-only Jira mirror with your own notes (sync is one-way: Jira -> local).
@@ -49,7 +52,21 @@ Work
   commit [-m MSG]                 commit your own files (notes) to the vault's local git
   serve [--port 7420] [--open]    local web UI on http://127.0.0.1:<port> (loopback only)
 
-Open loops (what I am waiting for, until when, and what to do then — kept in loops.md)
+Outline (outline.md: tickets → steps → subtasks → waits, one tree; every change is committed)
+  outline [--lens all|active|today|waiting|expired|standup] [--key KEY] [--find TEXT] [--no-ids]
+                                  the tree; a lens shows what it picks with all its parents
+  outline --at DAY [--lens …]     the outline as it was at the end of DAY (YYYY-MM-DD, yesterday, -3d)
+  outline --history KEY|ID        how a ticket's part, or one item and what grew under it, evolved
+  outline --days [--since DAY] [--until DAY]
+                                  what changed, day by day (default: the last 7 days)
+  outline --migrate [--dry-run] [--no-log]
+                                  move loops.md into outline.md (closed steps from the Logs too)
+  outline add "TEXT" (--key KEY | --under ID | --after ID) [--top] [--note]
+  outline check ID ["outcome"] | uncheck ID | edit ID "TEXT" | note ID "TEXT" | rm ID
+  outline move ID (--key KEY | --under ID | --after ID) [--top]
+                                  edits by id; a task with "by WHEN" is a loop (checking it off logs it)
+
+Open loops (what I am waiting for, until when, and what to do then — items of outline.md, listed in loops.md)
   loop "TEXT" --by WHEN [--key KEY] [--from WHO] [--else "WHAT THEN"] [--tag BRANCH]
                                   WHEN: +4h, +30m, +2d, 18:00, eod, tomorrow, 2026-10-14, "2026-10-14 12:00";
                                   --tag (or a leading "#branch" in TEXT) names a parallel branch of the ticket
@@ -85,6 +102,14 @@ function need(value: string | undefined, usage: string): string {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // Every change lf makes to the outline is a commit of its own: the history is the vault's git.
+  outlineHooks.afterWrite = (vault, summary) => {
+    try {
+      commitOutline(vault, "lf", summary);
+    } catch (e) {
+      console.error(`lf: outline saved, but the commit failed: ${(e as Error).message}`);
+    }
+  };
   // `lf --vault PATH <command>` is the same as `lf <command> --vault PATH`.
   if (argv[0] === "--vault" && argv[1]) {
     process.env.LOCALFLOW_VAULT = argv[1];
@@ -286,6 +311,31 @@ async function main(argv: string[]): Promise<number> {
     case "log": {
       const { values, positionals } = parse(rest, {});
       cmdLog(resolveVault(values.vault as string | undefined), need(positionals[0], 'lf log KEY "text"'), positionals.slice(1).join(" "));
+      return 0;
+    }
+
+    case "outline": {
+      const { values, positionals } = parse(rest, {
+        lens: { type: "string" }, key: { type: "string" }, find: { type: "string" }, at: { type: "string" }, "no-ids": { type: "boolean" },
+        history: { type: "string" }, days: { type: "boolean" }, since: { type: "string" }, until: { type: "string" },
+        migrate: { type: "boolean" }, "dry-run": { type: "boolean" }, "no-log": { type: "boolean" },
+        under: { type: "string" }, after: { type: "string" }, top: { type: "boolean" }, note: { type: "boolean" },
+      });
+      const vault = resolveVault(values.vault as string | undefined);
+      if (values.history !== undefined) cmdOutlineHistory(vault, values.history as string);
+      else if (values.days) cmdOutlineDays(vault, { since: values.since as string | undefined, until: values.until as string | undefined });
+      else if (values.migrate) cmdOutlineMigrate(vault, { dryRun: values["dry-run"] as boolean | undefined, log: !values["no-log"] });
+      else if (positionals.length) {
+        cmdOutlineEdit(vault, positionals[0], positionals.slice(1), {
+          key: values.key as string | undefined, under: values.under as string | undefined, after: values.after as string | undefined,
+          top: values.top as boolean | undefined, note: values.note as boolean | undefined,
+        });
+      } else {
+        cmdOutlineView(vault, {
+          lens: values.lens as string | undefined, key: values.key as string | undefined, find: values.find as string | undefined,
+          at: values.at as string | undefined, ids: !values["no-ids"],
+        });
+      }
       return 0;
     }
 

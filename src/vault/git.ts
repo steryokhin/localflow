@@ -98,3 +98,43 @@ export function log(vault: string): Commit[] {
 export function gitInteractive(vault: string, args: string[]): number {
   return spawnSync("git", args, { cwd: vault, stdio: "inherit" }).status ?? 1;
 }
+
+export interface FileVersion {
+  sha: string;
+  /** Commit time, ISO 8601 with the local offset. */
+  date: string;
+  subject: string;
+  /** The file's full content after the commit ("" when the commit deleted it). */
+  text: string;
+}
+
+/**
+ * Every committed version of one file, oldest first, in a single git call: with a context as long
+ * as the file, each commit's patch is one hunk that holds the whole new file.
+ */
+export function fileVersions(vault: string, rel: string): FileVersion[] {
+  if (!head(vault)) return [];
+  const out = git(vault, ["log", "--reverse", "--no-color", "--no-ext-diff", "--unified=1000000", "-p", "--format=%x1e%H%x1f%cI%x1f%s", "--", rel]);
+  const versions: FileVersion[] = [];
+  for (const rec of out.split("\x1e")) {
+    if (!rec.trim()) continue;
+    const nl = rec.indexOf("\n");
+    const [sha, date, subject] = (nl === -1 ? rec : rec.slice(0, nl)).split("\x1f");
+    const body = nl === -1 ? "" : rec.slice(nl + 1).split("\n");
+    const lines: string[] = [];
+    let inHunk = false;
+    for (const l of body) {
+      if (l.startsWith("@@")) {
+        inHunk = true;
+        continue;
+      }
+      if (!inHunk) continue;
+      // "\ No newline at end of file" and removed lines are not part of the new version.
+      if (l.startsWith(" ") || l.startsWith("+")) lines.push(l.slice(1));
+    }
+    if (!inHunk) continue;
+    versions.push({ sha, date, subject: subject ?? "", text: lines.length ? lines.join("\n") + "\n" : "" });
+  }
+  return versions;
+}
+
