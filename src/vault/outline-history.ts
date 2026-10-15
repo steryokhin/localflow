@@ -7,7 +7,7 @@
 
 import path from "node:path";
 import { readTextIfExists } from "../util.ts";
-import { commitPaths, fileVersions } from "./git.ts";
+import { commitPaths, fileVersions, git, head } from "./git.ts";
 import { fmtDay } from "./loopfields.ts";
 import { OUTLINE_FILE, ancestors, parseOutline, sectionRef } from "./outline.ts";
 import type { Item, Outline, Section } from "./outline.ts";
@@ -34,11 +34,13 @@ let cache: { key: string; versions: Version[] } | null = null;
 
 /** Every committed version of outline.md, oldest first, plus the uncommitted one when it differs. */
 export function versions(vault: string, now = new Date()): Version[] {
-  const committed = fileVersions(vault, OUTLINE_FILE);
   const current = readTextIfExists(path.join(vault, OUTLINE_FILE));
-  const last = committed[committed.length - 1];
-  const key = `${vault}\0${last?.sha ?? ""}\0${committed.length}\0${current ?? ""}`;
+  // One cheap git call tells whether anything was committed since the last full read.
+  const lastSha = head(vault) ? git(vault, ["log", "-1", "--format=%H", "--", OUTLINE_FILE]).trim() : "";
+  const key = `${vault}\0${lastSha}\0${current ?? ""}`;
   if (cache?.key === key) return cache.versions;
+  const committed = fileVersions(vault, OUTLINE_FILE);
+  const last = committed[committed.length - 1];
   const out: Version[] = committed.map((v) => ({ sha: v.sha, date: v.date, subject: v.subject, o: parseOutline(v.text) }));
   if (current !== null && current !== (last?.text ?? null)) {
     out.push({ sha: null, date: localIso(now), subject: "not committed yet", o: parseOutline(current) });
@@ -141,15 +143,20 @@ export function diffOutlines(a: Outline | null, b: Outline, at: { date: string; 
   return out;
 }
 
+let eventsCache: { versions: Version[]; events: OutlineEvent[] } | null = null;
+
 /** Every change, oldest first. */
 export function allEvents(vault: string, now = new Date()): OutlineEvent[] {
   const vs = versions(vault, now);
+  // The same versions (nothing committed or edited since) give the same events.
+  if (eventsCache?.versions === vs) return eventsCache.events;
   const out: OutlineEvent[] = [];
   let prev: Outline | null = null;
   for (const v of vs) {
     out.push(...diffOutlines(prev, v.o, { date: v.date, sha: v.sha, subject: v.subject }));
     prev = v.o;
   }
+  eventsCache = { versions: vs, events: out };
   return out;
 }
 
