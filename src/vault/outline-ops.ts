@@ -79,21 +79,51 @@ export function normalizeTaskText(text: string, check: Check, now: Date, workday
   return out;
 }
 
+const ID_RE = /^[A-Za-z0-9]{2,16}$/;
+
+function checkOf(v: unknown): Check {
+  if (v === null || v === " " || v === "x") return v;
+  throw new UserError(`check is " ", "x" or null (got ${JSON.stringify(v)}).`);
+}
+
+/** Context lines as given, each on one line. */
+function contextOf(v: unknown): string[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw new UserError("context is a list of lines.");
+  return v.map((c) => String(c).replace(/\r?\n/g, " "));
+}
+
+/**
+ * A note's text that starts with "[ ] " or "[x] " would read back as a task: the box is taken as
+ * meant, and the item becomes that task.
+ */
+function boxFromText(text: string, check: Check): { text: string; check: Check } {
+  const m = /^\[([ xX])\] (.*)$/.exec(text);
+  if (check !== null || !m) return { text, check };
+  return { text: m[2], check: m[1] === " " ? " " : "x" };
+}
+
 function toNew(t: TreeIn, taken: Set<string>, now: Date, workdayEnd?: string): NewItem {
-  let id = t.id && !taken.has(t.id) ? t.id : newId(taken);
+  if (!t || typeof t !== "object") throw new UserError("item is an object: { text, check, context?, children? }.");
+  if (t.id !== undefined && (typeof t.id !== "string" || !ID_RE.test(t.id))) throw new UserError(`Not an id: ${JSON.stringify(t.id)}.`);
+  if (t.children !== undefined && !Array.isArray(t.children)) throw new UserError("children is a list.");
+  const boxed = boxFromText(oneLine(String(t.text ?? "")), checkOf(t.check));
+  const id = t.id && !taken.has(t.id) ? t.id : newId(taken);
   taken.add(id);
   return {
-    id, check: t.check, text: normalizeTaskText(t.text ?? "", t.check, now, workdayEnd), context: t.context ?? [],
+    id, check: boxed.check, text: normalizeTaskText(boxed.text, boxed.check, now, workdayEnd), context: contextOf(t.context),
     children: (t.children ?? []).map((c) => toNew(c, taken, now, workdayEnd)),
   };
 }
 
 /** `moving`: the item being moved, which does not count among the siblings (see moveItem). */
 function resolvePlace(m: Model, p: PlaceIn, ids: Record<string, string>, moving?: Item): Place {
+  if (!p || typeof p !== "object") throw new UserError("place is { after } or { parent, section, index }.");
   const real = (id: string): string => ids[id] ?? id;
   if (p.after) {
     const it = m.o.byRef.get(real(p.after));
     if (!it) throw new UserError(`No item ^${p.after}.`);
+    if (it === moving) throw new UserError("An item cannot go after itself.");
     const siblings = (it.parent ? it.parent.children : it.section.items).filter((s) => s !== moving);
     return { parent: it.parent?.ref ?? null, section: it.section.key ?? `#${it.section.title}`, index: siblings.indexOf(it) + 1 };
   }
@@ -141,9 +171,10 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
         }
         case "text": {
           const it = item(m, real(op.id), op.expect);
-          const text = normalizeTaskText(op.text, it.check, now, opts.workdayEnd);
-          if (text === it.text) break;
-          apply(m, setItem(m.o, it, { text }));
+          const boxed = boxFromText(oneLine(String(op.text ?? "")), it.check);
+          const text = normalizeTaskText(boxed.text, boxed.check, now, opts.workdayEnd);
+          if (text === it.text && boxed.check === it.check) break;
+          apply(m, setItem(m.o, it, { text, check: boxed.check }));
           const now2 = m.o.byRef.get(it.ref)!;
           if (loopOf(now2) && !loopOf(it)) effects.push({ kind: "track", key: now2.section.key });
           m.summary.push(`edit ${it.ref}: ${text}`);
@@ -151,7 +182,7 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
         }
         case "check": {
           const it = item(m, real(op.id), op.expect);
-          if (op.check !== null && op.check !== " " && op.check !== "x") throw new UserError(`check is " ", "x" or null.`);
+          checkOf(op.check);
           if (it.check === op.check) break;
           const wasLoop = loopOf(it);
           apply(m, setItem(m.o, it, { check: op.check, text: normalizeTaskText(it.text, op.check, now, opts.workdayEnd) }));
@@ -165,7 +196,7 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
         }
         case "context": {
           const it = item(m, real(op.id), op.expect);
-          const context = (op.context ?? []).map((c) => String(c).replace(/\r?\n/g, " "));
+          const context = contextOf(op.context ?? []);
           apply(m, setItem(m.o, it, { context }));
           m.summary.push(`note ${it.ref}`);
           break;
@@ -189,6 +220,7 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
           if (key && m.o.sections.some((s) => s.key === key)) throw new UserError(`${key} already has a section.`);
           const title = (op.title ?? "").trim() || (key ? findTicket(vault, key)?.title ?? "" : "");
           if (!key && !title) throw new UserError("A section needs a ticket key or a title.");
+          if (!key && m.o.sections.some((x) => !x.key && x.title === oneLine(title))) throw new UserError(`There is already a section "${title}".`);
           apply(m, addSection(m.o, key, oneLine(title)));
           m.summary.push(`section ${key ?? title}`);
           break;
@@ -196,7 +228,13 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
         case "sectionSet": {
           const s = findSection(m.o, op.section);
           if (!s) throw new ConflictError(`No section ${op.section}. Reload to see the current version.`);
-          apply(m, setSection(m.o, s, { title: op.title === undefined ? undefined : oneLine(op.title), closed: op.closed }));
+          const title = op.title === undefined ? undefined : oneLine(String(op.title));
+          if (title !== undefined && !s.key) {
+            // A free section is known by its title: it cannot be empty or the same as another one.
+            if (!title) throw new UserError("A section without a ticket needs a title.");
+            if (m.o.sections.some((x) => x !== s && !x.key && x.title === title)) throw new UserError(`There is already a section "${title}".`);
+          }
+          apply(m, setSection(m.o, s, { title, closed: op.closed === undefined ? undefined : !!op.closed }));
           m.summary.push(`section ${op.section}${op.closed === undefined ? "" : op.closed ? " closed" : " reopened"}`);
           break;
         }

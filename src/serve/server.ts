@@ -183,7 +183,11 @@ class OutlineCommitter {
     try {
       commitOutline(this.#vault, summary.length ? "ui" : "hand", summary.length ? summary : ["edited outside lf"]);
     } catch (e) {
-      this.#say(`outline commit failed: ${(e as Error).message}`);
+      // Another git command may hold the index (lf sync): keep what was done and try again later.
+      this.#say(`outline commit failed, retrying: ${(e as Error).message}`);
+      this.#summary = [...summary, ...this.#summary];
+      this.#timer = setTimeout(() => this.flush(), this.#delay * 3);
+      this.#timer.unref();
     }
   }
 }

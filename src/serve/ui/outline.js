@@ -127,6 +127,7 @@
       this.focus = null;         // { id, offset }
       this.drafts = new Map();   // id -> text typed and not saved yet
       this.typedFrom = new Map(); // id -> text when this typing session began (for undo)
+      this.typedOwn = new Map();  // id -> the server's own-content hash when typing began
       this.saveTimer = 0;
       this.queue = [];           // operation batches waiting to be sent
       this.inflight = false;
@@ -164,11 +165,20 @@
     }
 
     /** Called by the page on every change in the vault. */
+    /** Something is being typed or chosen that a redraw would throw away. */
+    busy() {
+      const a = document.activeElement;
+      const typingHere = a && this.root.contains(a) && (a.classList.contains("ol-htitle") || a.classList.contains("ol-ctxedit") || a.closest(".ol-secform"));
+      return this.destroyed || this.inflight || this.queue.length || this.drafts.size || this.drag ||
+        (this.ctxEdit !== null && this.ctxEdit !== undefined) || this.addingSection || this.menu || typingHere;
+    }
+
     async refresh() {
-      if (this.destroyed || this.inflight || this.queue.length || this.drafts.size || this.drag) return;
+      if (this.busy()) { this.pendingRefresh = true; return; }
       let v;
       try { v = await this.api("GET", "/api/outline"); } catch { return; }
-      if (this.destroyed || this.inflight || this.queue.length || this.drafts.size || this.drag) return;
+      if (this.busy()) { this.pendingRefresh = true; return; }
+      this.pendingRefresh = false;
       if (this.view && v.version === this.view.version) return;
       this.adopt(v, { external: true });
       if (this.history && this.history.mode !== "day") this.loadHistory();
@@ -301,7 +311,7 @@
       const ops = this.queue.shift();
       // Fill in what the server checks against: each item's own-content hash as last seen.
       for (const op of ops) {
-        if ((op.op === "text" || op.op === "context") && op.expect === undefined) {
+        if (op.op === "context" && op.expect === undefined) {
           const own = this.serverOwn(op.id);
           if (own) op.expect = own;
         }
@@ -323,17 +333,19 @@
           this.view = r.view;
         }
         this.say(this.queue.length ? "Saving…" : "Saved");
+        if (!this.queue.length && this.pendingRefresh) setTimeout(() => this.refresh(), 0);
       } catch (err) {
         this.inflight = false;
         this.queue = [];
         this.say("Not saved", "err");
-        this.toast(err.message);
-        if (err.status === 409 || err.status === 400) {
-          this.drafts.clear();
-          this.undoStack = [];
-          this.redoStack = [];
-          await this.load();
-        }
+        this.toast(err.status === 409 ? err.message : `Not saved: ${err.message}. Showing the outline as it is on disk.`);
+        // Whatever went wrong, the page shows the file again: nothing on screen that is not saved.
+        this.drafts.clear();
+        this.typedFrom.clear();
+        this.typedOwn.clear();
+        this.undoStack = [];
+        this.redoStack = [];
+        await this.load();
       }
       this.pump();
     }
@@ -387,7 +399,11 @@
       const id = el.closest(".ol-row").dataset.id;
       const e = this.idx.get(id);
       if (!e) return;
-      if (!this.typedFrom.has(id)) this.typedFrom.set(id, e.node.text);
+      if (!this.typedFrom.has(id)) {
+        this.typedFrom.set(id, e.node.text);
+        // What the server had when typing began: a change made elsewhere since then is a conflict.
+        this.typedOwn.set(id, this.serverOwn(id));
+      }
       this.drafts.set(id, el.textContent);
       e.node.text = el.textContent;
       clearTimeout(this.saveTimer);
@@ -403,12 +419,14 @@
       for (const [id, text] of this.drafts) {
         const was = this.typedFrom.get(id);
         if (was === undefined || was === text) continue;
-        ops.push({ op: "text", id, text });
+        const own = this.typedOwn.get(id);
+        ops.push(own ? { op: "text", id, text, expect: own } : { op: "text", id, text });
         inverse.push({ op: "text", id, text: was });
         this.sticky.add(id);
       }
       this.drafts.clear();
       this.typedFrom.clear();
+      this.typedOwn.clear();
       if (!ops.length) return;
       this.undoStack.push({ ops, inverse: inverse.reverse() });
       this.redoStack = [];
@@ -443,16 +461,15 @@
     moveTo(ids, placeFor) {
       const ops = [];
       const inverse = [];
-      for (const id of ids) {
-        inverse.unshift({ op: "move", id, place: this.placeOf(id) });
-      }
-      // Places are computed one by one on the model as it changes.
+      // Places are computed one by one on the model as it changes, and so are the ways back.
       this.flushDrafts();
       for (const id of ids) {
+        const back = { op: "move", id, place: this.placeOf(id) };
         const place = placeFor(id);
         if (!place) continue;
         const op = { op: "move", id, place };
         ops.push(op);
+        inverse.unshift(back);
         this.localApply([op]);
       }
       if (!ops.length) return;
@@ -519,8 +536,11 @@
       const tops = ids.filter((id) => !ids.some((o) => o !== id && this.isUnder(id, o)));
       const inverse = [];
       const ops = [];
-      for (const id of tops) {
-        inverse.unshift({ op: "insert", place: this.placeOf(id), item: this.snapshotOf(this.idx.get(id).node) });
+      // Put back in document order at their old places: each one's place counts the ones before it.
+      const ordered = this.visibleIds().filter((id) => tops.includes(id));
+      for (const id of tops) if (!ordered.includes(id)) ordered.push(id);
+      for (const id of ordered) {
+        inverse.push({ op: "insert", place: this.placeOf(id), item: this.snapshotOf(this.idx.get(id).node) });
         ops.push({ op: "delete", id });
       }
       this.sel = null;
@@ -947,10 +967,15 @@
         const ref = t.dataset.sectitle;
         const sec = this.sections.find((s) => s.ref === ref);
         const title = t.textContent.trim();
-        if (sec && title !== sec.title) {
+        if (sec && !sec.key && !title) { t.textContent = sec.title; this.toast("A section without a ticket needs a title."); }
+        else if (sec && title !== sec.title) {
           const old = sec.title;
+          // A free section is known by its title, so its ref changes with it.
+          const newRef = sec.key ? ref : "#" + title;
           sec.title = title;
-          this.undoStack.push({ ops: [{ op: "sectionSet", section: ref, title }], inverse: [{ op: "sectionSet", section: ref, title: old }] });
+          sec.ref = newRef;
+          this.undoStack.push({ ops: [{ op: "sectionSet", section: ref, title }], inverse: [{ op: "sectionSet", section: newRef, title: old }] });
+          this.redoStack = [];
           this.send([{ op: "sectionSet", section: ref, title }]);
         }
       }
@@ -1055,6 +1080,7 @@
 
     editContext(id) {
       this.ctxEdit = id;
+      this.ctxOwn = this.serverOwn(id);
       this.ctxOpen.delete(id);
       this.render();
       const ta = this.body.querySelector(".ol-ctxedit");
@@ -1072,7 +1098,8 @@
       if (context.join("\n") !== was.join("\n")) {
         if (context.length) this.ctxOpen.add(id);
         write(CTX_OPEN_KEY, [...this.ctxOpen]);
-        this.act([{ op: "context", id, context }], [{ op: "context", id, context: was }], { id, offset: this.rawText(id).length });
+        const op = this.ctxOwn ? { op: "context", id, context, expect: this.ctxOwn } : { op: "context", id, context };
+        this.act([op], [{ op: "context", id, context: was }], { id, offset: this.rawText(id).length });
       } else {
         this.focus = { id, offset: this.rawText(id).length };
         this.render();

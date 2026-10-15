@@ -17,7 +17,7 @@ import {
 } from "../src/vault/outline.ts";
 import { changesByDay, commitOutline, itemHistory, outlineAt, ticketHistory } from "../src/vault/outline-history.ts";
 import { applyOps, normalizeTaskText } from "../src/vault/outline-ops.ts";
-import { outlineHooks, readModel } from "../src/vault/outline-store.ts";
+import { loopOf, outlineHooks, readModel } from "../src/vault/outline-store.ts";
 import { findTicket } from "../src/vault/store.ts";
 
 const FIXTURES = path.join(import.meta.dirname, "..", "docs", "outline-format", "fixtures");
@@ -234,4 +234,64 @@ test("migrate: open loops from loops.md and closed steps from the Logs, ids kept
   cmdOutlineMigrate(v2, {});
   assert.equal(fs.readFileSync(path.join(v2, "outline.md"), "utf8"), text, "a second run changes nothing");
   assert.match(fs.readFileSync(path.join(v2, "loops.md"), "utf8"), /^- \[ \] L7 · 2026-10-10 09:00 · WORK-001 · #android · QA check · from Lena · by 2026-10-14 · after L6$/m);
+});
+
+// ---------- found in review ----------
+
+test("loops.md by hand: [x] checks the item off and keeps its children; a dropped id is the same loop; an outline edit beats a deletion", () => {
+  const v3 = path.join(tmp, "v3");
+  cmdInit(v3, { localPrefix: "WORK" });
+  cmdCreate(v3, "WORK", "Hand", {});
+  const lf = (rel: string): string => path.join(v3, rel);
+  const a = addLoop(v3, { text: "close me by hand", key: "WORK-001", by: "+1d" }, MON);
+  applyOps(v3, [{ op: "insert", place: { parent: a.id }, item: { text: "child kept", check: " " } }], MON);
+  fs.writeFileSync(lf("loops.md"), fs.readFileSync(lf("loops.md"), "utf8").replace(`- [ ] ^${a.id}`, `- [x] ^${a.id}`));
+  const m = readModel(v3);
+  assert.equal(m.o.byRef.get(a.id)!.check, "x", "checked off, not deleted");
+  assert.ok(m.o.items.some((i) => i.text === "child kept"));
+
+  const b = addLoop(v3, { text: "lost its id", key: "WORK-001", by: "+1d" }, MON);
+  fs.writeFileSync(lf("loops.md"), fs.readFileSync(lf("loops.md"), "utf8").replace(`^${b.id} · `, ""));
+  assert.ok(readModel(v3).o.byRef.has(b.id), "the line without its id is still that loop");
+  assert.equal(readLoops(v3).filter((l) => l.text === "lost its id").length, 1);
+
+  const c = addLoop(v3, { text: "edited in outline", key: "WORK-001", by: "+1d" }, MON);
+  fs.writeFileSync(lf("outline.md"), fs.readFileSync(lf("outline.md"), "utf8").replace("edited in outline", "edited in outline, then"));
+  fs.writeFileSync(lf("loops.md"), fs.readFileSync(lf("loops.md"), "utf8").split("\n").filter((l) => !l.includes(`^${c.id} `)).join("\n"));
+  assert.ok(readModel(v3).o.byRef.has(c.id), "changed in the outline since the last write: the deletion does not apply");
+});
+
+test("operations validate what they write: no new lines from context, ids and checks are checked", () => {
+  const before = read("outline.md");
+  applyOps(vault, [{ op: "insert", place: { parent: null, section: "WORK-001" }, item: { text: "safe", check: " ", context: ["c\n## PROJ-9 · evil\n- [ ] sneaky ^s2s2"] } }], MON);
+  assert.doesNotMatch(read("outline.md"), /^## PROJ-9/m);
+  assert.notEqual(read("outline.md"), before);
+  assert.throws(() => applyOps(vault, [{ op: "insert", place: { parent: null, section: "WORK-001" }, item: { id: "a b\n", text: "x", check: " " } }], MON), /Not an id/);
+  assert.throws(() => applyOps(vault, [{ op: "insert", place: { parent: null, section: "WORK-001" }, item: { text: "x", check: "foo" as never } }], MON), /check is/);
+  const r = applyOps(vault, [{ op: "insert", temp: "n", place: { parent: null, section: "WORK-001" }, item: { text: "[x] typed as a note", check: null } }], MON);
+  assert.equal(readModel(vault).o.byRef.get(r.ids.n)!.check, "x", "a note typed with a box becomes that task");
+  assert.throws(() => applyOps(vault, [{ op: "move", id: r.ids.n, place: { after: r.ids.n } }], MON), /after itself/);
+  applyOps(vault, [{ op: "section", title: "Free one" }], MON);
+  assert.throws(() => applyOps(vault, [{ op: "section", title: "Free one" }], MON), /already a section/);
+  assert.throws(() => applyOps(vault, [{ op: "sectionSet", section: "#Free one", title: "" }], MON), /needs a title/);
+});
+
+test("format edge cases: CRLF files, hand-indented siblings, a by that is not a date, an id-less item moved across sections", () => {
+  const crlf = parseOutline("# Outline\r\n\r\n## A-1 · T\r\n- [ ] foo ^f2f2\r\n");
+  assert.equal(crlf.items.length, 1);
+  assert.equal(crlf.items[0].text, "foo");
+  const odd = parseOutline("## A-1\n- [ ] p ^a2a2\n    - [ ] deep ^b2b2\n  - [ ] shallow ^c2c2\n");
+  const added = parseOutline(outlineText(insertItem(odd, { parent: "a2a2" }, { id: "d2d2", check: " ", text: "new" })));
+  assert.equal(added.byRef.get("d2d2")!.parent!.ref, "a2a2", "appended at the last sibling's indentation");
+  const notLoop = parseOutline("## A-1\n- [ ] foo · by tomorrow ^f2f2\n");
+  assert.equal(loopOf(notLoop.items[0]), null, "an unreadable by typed by hand is not a loop");
+
+  const v4 = path.join(tmp, "v4");
+  cmdInit(v4, { localPrefix: "WORK" });
+  fs.writeFileSync(path.join(v4, "outline.md"), "## A · one\n- [ ] no id yet\n\n## B · two\n- [ ] other\n");
+  const id = readModel(v4).o.items[0].ref;
+  applyOps(v4, [{ op: "move", id, place: { parent: null, section: "#B · two" } }, { op: "text", id, text: "no id yet, moved" }], MON);
+  const after = readModel(v4).o;
+  assert.equal(after.byRef.get(id)!.text, "no id yet, moved", "the id survives the move to another section");
+  assert.equal(after.byRef.get(id)!.section.title, "B · two");
 });

@@ -10,12 +10,14 @@
 // Reads never write. Every write is a compare-and-swap of both files: if either changed after it
 // was read, the operation runs again on the fresh content.
 
+import fs from "node:fs";
 import path from "node:path";
+import { STATE_DIR } from "../config.ts";
 import { ConflictError, contentHash, readTextIfExists, writeFileAtomic } from "../util.ts";
-import { ME, OPEN_RE, formatLoop, formatLoopItem, parseLoop, splitLeadingTag } from "./loopfields.ts";
+import { ME, OPEN_RE, dueAt, formatLoop, formatLoopItem, parseLoop, splitLeadingTag } from "./loopfields.ts";
 import type { Loop } from "./loopfields.ts";
 import {
-  NO_TICKET, OUTLINE_FILE, OUTLINE_HEADER, addSection, derivedId, findSection, insertItem, moveItem, outlineText, parseOutline, removeItem,
+  NO_TICKET, OUTLINE_FILE, OUTLINE_HEADER, addSection, derivedId, insertItem, moveItem, outlineText, parseOutline, removeItem,
   sectionRef, setItem, withIds,
 } from "./outline.ts";
 import type { Item, NewItem, Outline, Place, Section } from "./outline.ts";
@@ -74,7 +76,8 @@ export function inheritedTag(it: Item): string | null {
 export function loopOf(it: Item, opts: { closed?: boolean } = {}): Loop | null {
   if (it.check === null || (it.check === "x" && !opts.closed)) return null;
   const p = parseLoop(it.text);
-  if (!p.due) return null;
+  // An unreadable "by" ("someday") is kept as typed, but the item is not a loop.
+  if (!p.due || !dueAt(p.due)) return null;
   const loop: Loop = { ...p, id: it.ref, key: it.section.key, tag: p.tag ?? inheritedTag(it) };
   loop.raw = formatLoop(loop);
   return loop;
@@ -153,26 +156,52 @@ export function readModel(vault: string): Model {
   return m;
 }
 
+const CLOSED_LINE_RE = /^- \[[xX]\] (.+)$/;
+
 function mergeLoops(m: Model): void {
   const lines = m.loopsLines!;
   const taken = new Set(m.o.byRef.keys());
   const seen = new Map<string, number>();
-  const parsed: Array<{ i: number; raw: string; loop: Loop }> = [];
+  const parsed: Array<{ i: number; raw: string; loop: Loop; derived: boolean }> = [];
+  const checked: string[] = [];
   lines.forEach((line, i) => {
-    const match = OPEN_RE.exec(line.trim());
-    if (!match) return;
     const raw = line.trim();
+    const done = CLOSED_LINE_RE.exec(raw);
+    if (done) {
+      // "- [x] ^k3f9 · …": a loop checked off by hand in loops.md.
+      const id = parseLoop(done[1]).id;
+      if (id) checked.push(id);
+      return;
+    }
+    const match = OPEN_RE.exec(raw);
+    if (!match) return;
     const loop = parseLoop(match[1]);
+    let derived = false;
     if (!loop.id) {
       const n = (seen.get(raw) ?? 0) + 1;
       seen.set(raw, n);
       loop.id = derivedId(`${LOOPS_FILE}\0${raw}\0${n}`, taken);
+      derived = true;
     }
     taken.add(loop.id);
     m.lineIds.set(i, loop.id);
-    parsed.push({ i, raw, loop });
+    parsed.push({ i, raw, loop, derived });
   });
   const base = m.base;
+  if (base) {
+    // A line whose id was dropped or mistyped, same ticket and text as a missing one: the same loop.
+    const present = new Set(parsed.filter((p) => !p.derived).map((p) => p.loop.id));
+    for (const id of Object.keys(base)) {
+      if (present.has(id)) continue;
+      const old = parseLoop(base[id].replace(/^- \[ \] /, ""));
+      const same = parsed.find((p) => p.derived && p.loop.text === old.text && p.loop.key === old.key);
+      if (!same) continue;
+      same.loop.id = id;
+      same.derived = false;
+      m.lineIds.set(same.i, id);
+      present.add(id);
+    }
+  }
   // Without a baseline lf cannot tell which side changed a loop both files have: the outline wins.
   const trustLines = base !== null || !m.outlineExists;
   for (const { raw, loop } of parsed) {
@@ -194,11 +223,22 @@ function mergeLoops(m: Model): void {
     }
     setLoop(m, it, { ...loop, created: loop.created || now?.created || "" });
   }
+  for (const id of checked) {
+    const it = m.o.byRef.get(id);
+    if (!it || it.check !== " " || !loopOf(it)) continue;
+    apply(m, setItem(m.o, it, { check: "x" }));
+    m.summary.push(`checked off ^${id} (in loops.md)`);
+  }
   if (base) {
     const present = new Set(parsed.map((p) => p.loop.id));
+    for (const id of [...checked]) present.add(id);
     for (const id of Object.keys(base)) {
       const it = m.o.byRef.get(id);
-      if (present.has(id) || !it || !loopOf(it)) continue;
+      if (present.has(id) || !it) continue;
+      const l = loopOf(it);
+      // Only a loop nobody changed in the outline since lf last wrote it: an outline edit wins over
+      // the deletion, and the line comes back on the next write.
+      if (!l || l.raw !== base[id]) continue;
       apply(m, removeItem(m.o, it));
       m.summary.push(`removed ^${id} with what was under it (its line was deleted from loops.md)`);
     }
@@ -264,9 +304,47 @@ export function writeModel(m: Model): boolean {
  * acts on as read (an item's own content): if that differs on a retry, the operation is refused.
  */
 export function editModel<T>(vault: string, op: (m: Model) => { result: T; target?: string }, refused: (now: string) => string): T {
+  const unlock = lock(vault);
+  try {
+    return editLocked(vault, op, refused);
+  } finally {
+    unlock();
+  }
+}
+
+/**
+ * One writer at a time across processes (lf in a terminal, lf serve, lf watch): a lock file around
+ * read, change and write. Editors that do not know it are still caught by the hashes.
+ */
+function lock(vault: string): () => void {
+  const dir = path.join(vault, STATE_DIR);
+  const file = path.join(dir, "outline.lock");
+  fs.mkdirSync(dir, { recursive: true });
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(file, "wx"));
+      return () => fs.rmSync(file, { force: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      // A lock left by a process that died is stale after 10 s.
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > 10_000) fs.rmSync(file, { force: true });
+      } catch {
+        /* gone meanwhile */
+      }
+      if (Date.now() > deadline) throw new ConflictError("Another lf is writing the outline right now. Try again in a moment.");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
+function editLocked<T>(vault: string, op: (m: Model) => { result: T; target?: string }, refused: (now: string) => string): T {
   let pinned: string | undefined;
   for (let attempt = 0; attempt < 5; attempt++) {
     const m = readModel(vault);
+    // Ids are stored before anything moves: a derived id depends on where an item is and what it says.
+    if (m.o.items.some((it) => !it.id)) apply(m, withIds(m.o));
     const { result, target } = op(m);
     if (target !== undefined) {
       if (pinned === undefined) pinned = target;

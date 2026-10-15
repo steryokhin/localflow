@@ -131,7 +131,9 @@ function splitId(rest: string): { text: string; id: string | null } {
   return { text: rest.slice(0, m.index).replace(/\s+$/, ""), id: m[1] };
 }
 
-export function parseOutline(text: string): Outline {
+export function parseOutline(raw: string): Outline {
+  // Windows line ends are read as plain ones (and written back as plain ones).
+  const text = raw.replace(/\r\n?/g, "\n");
   const lines = text.replace(/\n$/, "").split("\n");
   if (text === "") lines.length = 0;
   const sections: Section[] = [];
@@ -317,8 +319,9 @@ function slot(o: Outline, place: Place): { at: number; indent: number } {
   const i = place.index === undefined ? siblings.length : Math.max(0, Math.min(place.index, siblings.length));
   if (i < siblings.length) return { at: siblings[i].line, indent: siblings[i].indent };
   if (siblings.length) {
+    // After the last sibling, at its own indentation (hand-indented siblings may differ).
     const last = siblings[siblings.length - 1];
-    return { at: blockEnd(o.lines, last.line, last.end), indent };
+    return { at: blockEnd(o.lines, last.line, last.end), indent: last.indent };
   }
   return { at: after, indent };
 }
