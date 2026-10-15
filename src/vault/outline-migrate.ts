@@ -26,8 +26,8 @@ function addClosedSteps(vault: string, m: Model): number {
     if (!steps.length) continue;
     ensureSection(m, t.key);
     steps.forEach((c, i) => {
-      const text = formatLoopItem({ id: c.id, created: "", key: t.key, text: c.text, owner: "me", due: "", onExpiry: "", tag: c.tag, after: c.after }, null);
-      apply(m, insertItem(m.o, { parent: null, section: t.key, index: i }, { id: c.id, check: "x", text, context: [`${c.outcome} (${c.date})`] }));
+      const text = formatLoopItem({ id: c.id, created: "", key: t.key, text: c.text, owner: "me", due: "", onExpiry: "", tag: c.tag, after: c.after, done: c.date }, null);
+      apply(m, insertItem(m.o, { parent: null, section: t.key, index: i }, { id: c.id, check: "x", text, context: [c.outcome] }));
       n++;
     });
   }

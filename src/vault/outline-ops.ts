@@ -7,7 +7,7 @@
 // `lf done`, and a ticket that gets a loop goes on the board.
 
 import { ConflictError, UserError } from "../util.ts";
-import { ME, dueAt, fmtStamp, parseLoop, parseWhen } from "./loopfields.ts";
+import { ME, dueAt, fmtStamp, parseLoop, parseWhen, withDone } from "./loopfields.ts";
 import { logClosed, logReopened } from "./loops.ts";
 import { isTracked, oneLine, setTracked } from "./notes.ts";
 import {
@@ -185,7 +185,8 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
           checkOf(op.check);
           if (it.check === op.check) break;
           const wasLoop = loopOf(it);
-          apply(m, setItem(m.o, it, { check: op.check, text: normalizeTaskText(it.text, op.check, now, opts.workdayEnd) }));
+          const text = withDone(normalizeTaskText(it.text, op.check, now, opts.workdayEnd), op.check === "x" ? fmtStamp(now) : null);
+          apply(m, setItem(m.o, it, { check: op.check, text }));
           const after = m.o.byRef.get(it.ref)!;
           const closedLoop = loopOf(after, { closed: true });
           if (wasLoop && op.check === "x") effects.push({ kind: "closed", key: it.section.key, loop: wasLoop, outcome: op.outcome });

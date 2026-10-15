@@ -70,6 +70,11 @@ stamped then. An unreadable `by` is kept as typed; the item is then not a loop.
 Checking a loop off (`[x]`, `lf done`, `lf outline check`) leaves it in place and writes a line to
 the ticket's `## Log` (`outcome (k3f9 #android, after L6: text, from Jim)`), as `lf done` always did.
 
+Any item checked off through lf, the editor or `[x]` in loops.md gets `done YYYY-MM-DD HH:MM`
+(`сделано …` is read too) as its last field, loop or not; unchecking takes it away. So the line
+itself says when it was closed, without git. A box ticked by hand in outline.md gets no date (the
+history still has the day). Steps brought in from the Logs by `--migrate` carry the Log line's date.
+
 ## loops.md
 
 `loops.md` lists the open loops one line each and stays editable:

@@ -8,7 +8,7 @@
 import path from "node:path";
 import { readTextIfExists } from "../util.ts";
 import { commitPaths, fileVersions, git, head } from "./git.ts";
-import { fmtDay } from "./loopfields.ts";
+import { doneOf, fmtDay } from "./loopfields.ts";
 import { OUTLINE_FILE, ancestors, parseOutline, sectionRef } from "./outline.ts";
 import type { Item, Outline, Section } from "./outline.ts";
 import { LOOPS_FILE } from "./outline-store.ts";
@@ -130,7 +130,8 @@ export function diffOutlines(a: Outline | null, b: Outline, at: { date: string; 
       else if (old.check === "x" && it.check === " ") ev("unchecked", it);
       else ev("task", it, { was: old.check === null ? "note" : "task" });
     }
-    if (old.text !== it.text) ev("edited", it, { was: old.text });
+    // Checking off stamps "done …" on the line: that is the check, not a rewording.
+    if (doneOf(old.text).text !== doneOf(it.text).text) ev("edited", it, { was: old.text });
     if (old.context.join("\n") !== it.context.join("\n")) ev("note", it, { was: old.context.join("\n") });
     if ((old.parent?.ref ?? null) !== (it.parent?.ref ?? null) || sectionRef(old.section) !== sectionRef(it.section)) ev("moved", it, { was: where(old) });
   }

@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { STATE_DIR } from "../config.ts";
 import { ConflictError, contentHash, readTextIfExists, writeFileAtomic } from "../util.ts";
-import { ME, OPEN_RE, dueAt, formatLoop, formatLoopItem, parseLoop, splitLeadingTag } from "./loopfields.ts";
+import { ME, OPEN_RE, dueAt, fmtStamp, formatLoop, formatLoopItem, parseLoop, splitLeadingTag, withDone } from "./loopfields.ts";
 import type { Loop } from "./loopfields.ts";
 import {
   NO_TICKET, OUTLINE_FILE, OUTLINE_HEADER, addSection, derivedId, insertItem, moveItem, outlineText, parseOutline, removeItem,
@@ -226,7 +226,7 @@ function mergeLoops(m: Model): void {
   for (const id of checked) {
     const it = m.o.byRef.get(id);
     if (!it || it.check !== " " || !loopOf(it)) continue;
-    apply(m, setItem(m.o, it, { check: "x" }));
+    apply(m, setItem(m.o, it, { check: "x", text: withDone(it.text, fmtStamp(new Date())) }));
     m.summary.push(`checked off ^${id} (in loops.md)`);
   }
   if (base) {

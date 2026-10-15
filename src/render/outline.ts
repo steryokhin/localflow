@@ -102,7 +102,8 @@ function displayText(it: Item, now: Date): string {
   const parts = [l.tag && l.tag !== null && it.text.startsWith(`#${l.tag} `) ? `#${l.tag} ${l.text}` : l.text];
   if (l.owner !== ME) parts.push(`from ${l.owner}`);
   if (l.due) parts.push(`by ${fmtDue(l.due, now)}`);
-  if (l.onExpiry) parts.push(`else: ${l.onExpiry}`);
+  if (l.onExpiry && it.check !== "x") parts.push(`else: ${l.onExpiry}`);
+  if (l.done) parts.push(`done ${l.done}`);
   return parts.join(" · ");
 }
 

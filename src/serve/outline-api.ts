@@ -3,7 +3,7 @@
 
 import { lastWorkingDay } from "../render/loops.ts";
 import { UserError } from "../util.ts";
-import { ME, dueAt, fmtDay, normalizeId } from "../vault/loopfields.ts";
+import { ME, doneOf, dueAt, fmtDay, normalizeId } from "../vault/loopfields.ts";
 import { ownHash, sectionRef } from "../vault/outline.ts";
 import type { Item, Outline } from "../vault/outline.ts";
 import { allEvents, checkedSince, itemHistory, outlineAt, ticketHistory } from "../vault/outline-history.ts";
@@ -23,6 +23,8 @@ export interface ItemView {
   context: string[];
   /** Own-content hash: sent back as `expect` with an edit. */
   own: string;
+  /** When it was checked off ("done …" on its line), or null. */
+  done: string | null;
   loop: {
     text: string;
     owner: string;
@@ -64,7 +66,7 @@ export interface OutlineView {
 function itemView(it: Item): ItemView {
   const l = loopOf(it, { closed: true });
   return {
-    id: it.ref, written: it.id !== null, check: it.check, text: it.text, context: it.context, own: ownHash(it),
+    id: it.ref, written: it.id !== null, check: it.check, text: it.text, context: it.context, own: ownHash(it), done: doneOf(it.text).done,
     loop: l ? {
       text: l.text, owner: l.owner, due: l.due, dueAt: dueAt(l.due)?.getTime() ?? null, onExpiry: l.onExpiry, tag: l.tag, after: l.after, created: l.created,
     } : null,

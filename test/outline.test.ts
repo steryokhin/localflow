@@ -17,6 +17,7 @@ import {
 } from "../src/vault/outline.ts";
 import { changesByDay, commitOutline, itemHistory, outlineAt, ticketHistory } from "../src/vault/outline-history.ts";
 import { applyOps, normalizeTaskText } from "../src/vault/outline-ops.ts";
+import { doneOf, withDone } from "../src/vault/loopfields.ts";
 import { loopOf, outlineHooks, readModel } from "../src/vault/outline-store.ts";
 import { findTicket } from "../src/vault/store.ts";
 
@@ -230,13 +231,44 @@ test("migrate: open loops from loops.md and closed steps from the Logs, ids kept
   fs.writeFileSync(notesFile, appendToSection(fs.readFileSync(notesFile, "utf8"), "Log", "- 2026-10-09 17:00 — sent to QA (L6 #android: send the build, from me)"));
   cmdOutlineMigrate(v2, {});
   const text = fs.readFileSync(path.join(v2, "outline.md"), "utf8");
-  assert.match(text, /## WORK-001 · Old ticket\n- \[x\] #android send the build \^L6\n  > sent to QA \(2026-10-09 17:00\)\n- \[ \] #android QA check · from Lena · by 2026-10-14 · after L6 · opened 2026-10-10 09:00 \^L7\n/);
+  assert.match(text, /## WORK-001 · Old ticket\n- \[x\] #android send the build · done 2026-10-09 17:00 \^L6\n  > sent to QA\n- \[ \] #android QA check · from Lena · by 2026-10-14 · after L6 · opened 2026-10-10 09:00 \^L7\n/);
   cmdOutlineMigrate(v2, {});
   assert.equal(fs.readFileSync(path.join(v2, "outline.md"), "utf8"), text, "a second run changes nothing");
   assert.match(fs.readFileSync(path.join(v2, "loops.md"), "utf8"), /^- \[ \] L7 · 2026-10-10 09:00 · WORK-001 · #android · QA check · from Lena · by 2026-10-14 · after L6$/m);
 });
 
 // ---------- found in review ----------
+
+test("checking off stamps done with the date on the line; unchecking takes it away; history sees a check, not a rewording", () => {
+  const v4 = path.join(tmp, "vdone");
+  cmdInit(v4, { localPrefix: "WORK" });
+  cmdCreate(v4, "WORK", "Done dates", {});
+  const r = applyOps(v4, [
+    { op: "section", key: "WORK-001" },
+    { op: "insert", temp: "s", place: { parent: null, section: "WORK-001" }, item: { text: "plain step", check: " " } },
+    { op: "insert", temp: "w", place: { parent: null, section: "WORK-001" }, item: { text: "wait · from Tom · by tomorrow", check: " " } },
+  ], MON);
+  commitOutline(v4, "test", ["two items"]);
+  const TUE = new Date(2026, 9, 13, 9, 30);
+  applyOps(v4, [{ op: "check", id: r.ids.s, check: "x" }], TUE);
+  const item = (id: string) => readModel(v4).o.byRef.get(id)!;
+  assert.equal(item(r.ids.s).text, "plain step · done 2026-10-13 09:30");
+  assert.equal(doneOf(item(r.ids.s).text).text, "plain step");
+  commitOutline(v4, "test", ["check"]);
+  const kinds = itemHistory(v4, r.ids.s).map((e) => e.kind);
+  assert.deepEqual(kinds, ["added", "checked"], "the stamp is part of the check");
+
+  applyOps(v4, [{ op: "check", id: r.ids.s, check: " " }], TUE);
+  assert.equal(item(r.ids.s).text, "plain step", "unchecked: no done date");
+
+  closeLoop(v4, r.ids.w, "Tom said yes", new Date(2026, 9, 14, 16, 5));
+  const w = item(r.ids.w);
+  assert.match(w.text, / · done 2026-10-14 16:05$/);
+  const l = loopOf(w, { closed: true })!;
+  assert.equal(l.text, "wait", "done is a field, not part of the loop's text");
+  assert.equal(l.done, "2026-10-14 16:05");
+  assert.equal(withDone("сделать · сделано 2026-10-01", null), "сделать", "the Russian marker is read too");
+});
 
 test("loops.md by hand: [x] checks the item off and keeps its children; a dropped id is the same loop; an outline edit beats a deletion", () => {
   const v3 = path.join(tmp, "v3");

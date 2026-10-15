@@ -30,6 +30,8 @@ export interface Loop {
   tag: string | null;
   /** The step this one follows ("L3"), or null. */
   after: string | null;
+  /** When it was checked off: "YYYY-MM-DD HH:MM" or "YYYY-MM-DD"; only on closed items. */
+  done?: string;
   /** The loop as a loops.md line (set when read). */
   raw?: string;
 }
@@ -127,6 +129,7 @@ export function parseLoop(rest: string): Loop {
     else if ((m = /^(?:else|иначе)\s*:\s*(.*)$/i.exec(f))) loop.onExpiry = m[1].trim();
     else if ((m = AFTER_RE.exec(f))) loop.after = normalizeId(m[1]);
     else if ((m = /^(?:opened|открыто)\s+(\d{4}-\d{2}-\d{2}(?: \d{1,2}:\d{2})?)$/i.exec(f))) loop.created = m[1];
+    else if ((m = DONE_FIELD_RE.exec(f))) loop.done = m[1];
     else if (!loop.tag && (m = TAG_RE.exec(f))) loop.tag = m[1];
     else if (!loop.created && !keySeen && !text.length && DATE_RE.test(f)) loop.created = f;
     else if (!keySeen && !text.length && (KEY_ONLY_RE.test(f) || f === "—" || f === "-")) {
@@ -164,5 +167,29 @@ export function formatLoopItem(l: Loop, inheritedTag: string | null): string {
   return [
     `${tag}${clean(l.text)}`, l.owner && l.owner !== ME ? `from ${clean(l.owner)}` : "", l.due ? `by ${l.due}` : "",
     l.after ? `after ${idField(l.after)}` : "", l.onExpiry ? `else: ${clean(l.onExpiry)}` : "", l.created ? `opened ${l.created}` : "",
+    l.done ? `done ${l.done}` : "",
   ].filter(Boolean).join(" · ");
+}
+
+// ---------- when an item was checked off ----------
+
+const DONE_FIELD_RE = /^(?:done|сделано)\s+(\d{4}-\d{2}-\d{2}(?: \d{1,2}:\d{2})?)$/i;
+
+/** An item's text without its "done …" field, and that field's date (null when there is none). */
+export function doneOf(text: string): { text: string; done: string | null } {
+  let done: string | null = null;
+  const kept: string[] = [];
+  for (const f of text.split(" · ")) {
+    const m = DONE_FIELD_RE.exec(f.trim());
+    if (m) done = m[1];
+    else kept.push(f);
+  }
+  return { text: kept.join(" · "), done };
+}
+
+/** The text with "done <stamp>" as its last field, or with none when `stamp` is null. */
+export function withDone(text: string, stamp: string | null): string {
+  const bare = doneOf(text).text;
+  if (!stamp) return bare;
+  return bare ? `${bare} · done ${stamp}` : `done ${stamp}`;
 }

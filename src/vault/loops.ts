@@ -15,7 +15,7 @@
 
 import path from "node:path";
 import { ConflictError, UserError, contentHash, readTextIfExists, writeFileAtomic } from "../util.ts";
-import { ME, cleanTag, dueAt, fmtStamp, formatLoop, normalizeId, parseLoop, parseWhen, splitLeadingTag } from "./loopfields.ts";
+import { ME, cleanTag, dueAt, fmtStamp, formatLoop, normalizeId, parseLoop, parseWhen, splitLeadingTag, withDone } from "./loopfields.ts";
 import type { Loop } from "./loopfields.ts";
 import { appendTicketLog, isTracked, oneLine, setTracked } from "./notes.ts";
 import { REF_ID_SRC, newId, setItem } from "./outline.ts";
@@ -155,7 +155,7 @@ export function closeLoop(vault: string, query: string, outcome: string, now: Da
     const l = findIn(m, query);
     assertNoConflict(m, l.id);
     checkExpected(l, opts.expect);
-    apply(m, setItem(m.o, l.item, { check: "x" }));
+    apply(m, setItem(m.o, l.item, { check: "x", text: withDone(l.item.text, fmtStamp(now)) }));
     m.summary.push(`done ${l.id}: ${oneLine(outcome) || "done"}`);
     return { result: strip(l), target: l.raw };
   }, refused);
