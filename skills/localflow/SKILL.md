@@ -106,7 +106,8 @@ Each fact lives in one place:
 | `ai-summary.md` | understanding of the ticket | written at the start, edited in place (no "Update" blocks), ends with open questions |
 | `actions.md` | the plan only: phases, checkboxes, how to verify | no log, status or reference material; about 80 lines at most |
 | `research-<topic>.md` | optional, one topic per file | edited in place: a new finding replaces the old conclusion |
-| `<vault>/loops.md` | open loops, all tickets | next steps and waits live only here |
+| `<vault>/outline.md` | one tree for all tickets: `## KEY · title`, then steps → subtasks → waits, with `> ` notes under items | the working plan of the day and every loop; each change is committed, so its history is in git |
+| `<vault>/loops.md` | the open loops of `outline.md`, one line each | editable; an edit there goes into the outline (and the other way round) |
 | `<vault>/notes/repos/<repo>.md` | the repository, not the ticket: environment, build and test commands, process (labels, reviews), pitfalls | shared by every ticket with `repo: <repo>`; move repo knowledge here instead of copying it into tickets |
 
 A taken ticket has at least `ai-summary.md`, `actions.md` and one open loop. Do not keep "Status"
@@ -120,13 +121,14 @@ log / Slack …)` for facts, `(inference)` for your conclusions. Never present a
 
 An open loop is something the user did or asked for and is now waiting on: a PR out for review, a
 build sent to QA, a question to a manager, or their own promise. Four fields: what, from whom (`me`
-or a name), by when, what to do if the deadline passes. They live in `<vault>/loops.md`, one line
-each; next steps and waits live **only** there (not in notes.md, not in actions.md).
+or a name), by when, what to do if the deadline passes. A loop is an item of `<vault>/outline.md`
+with a `by` field; `loops.md` lists the open ones one line each. Next steps and waits live **only**
+there (not in notes.md, not in actions.md). Ids are short (`k3f9`; older loops keep `L7`).
 
 - **You record them.** After any action in the conversation that leaves the user waiting
   ("wrote to QA", "pushed the PR", "asked Mark"), add a loop right away and say it in one line:
   `lf loop "PR #41 review" --key EXP-123 --from Tom --by +4h --else "ping in #ios-reviews"`
-  → "loop L3: waiting for Tom until 15:00, else ping in #ios-reviews". Pick a sensible deadline
+  → "loop k3f9: waiting for Tom until 15:00, else ping in #ios-reviews". Pick a sensible deadline
   and mention it; the user corrects it if needed. `lf loop` without `--key` is fine for loops
   that have no ticket (onboarding, a question to someone).
 - **Chain rule, always.** Closing a loop always opens the next one: a `me` loop is the user's next
@@ -145,9 +147,10 @@ each; next steps and waits live **only** there (not in notes.md, not in actions.
   (from `## Log`), then the open one.
 - **Moving a deadline** is the user's call: `lf bump L3 --by tomorrow` only when they say so; add
   `--else "…"` when the fallback changes too (the old deadline and the old else go to the Log).
-- **loops.md may change under you** (the user edits it by hand or in the web UI). `lf` re-reads and
-  re-applies by id; if the loop's own line changed or is gone, the command fails — read
-  `lf loops` again and redo it, do not edit the file around the error.
+- **outline.md and loops.md may change under you** (the user edits them by hand or in the web UI).
+  `lf` re-reads and re-applies by id; if the item's own line changed or is gone, the command fails
+  — read `lf loops` / `lf outline` again and redo it, do not edit the files around the error. A loop
+  edited in both files at once is refused until the two agree: show the user both versions.
 - **A tracked ticket always has at least one open loop.** It comes off the board only on the user's
   explicit word (`lf untrack KEY`) — never because it is Done in Jira or has gone quiet.
 - **Start of a session:** read `<vault>/NUDGES.md` (written by `lf watch` every 15 minutes) or run
@@ -158,6 +161,39 @@ each; next steps and waits live **only** there (not in notes.md, not in actions.
 - **After working on a ticket**, one dated line of what happened: `lf log EXP-123 "split the fix
   into two PRs"`.
 - Daily or weekly meeting: `lf standup` / `lf standup --week` and hand the output over as it is.
+
+## Outline
+
+`<vault>/outline.md` is the user's main working view (they used to keep it in Notion): per ticket a
+`## KEY · title` heading, under it steps, subtasks and waits as a nested checklist, `> ` lines for
+context. The web UI's Outline page edits the same file; `docs/outline-format.md` has the format.
+
+```markdown
+## EXP-123 · Login crash on swipe
+- [x] reproduce on iOS 26 ^k3f9
+- [ ] research the swipe handler ^m4p2
+  > Tom: the crash is in the swipe handler, not the cache
+  - [ ] wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios ^p5r6
+```
+
+- **Loops and steps.** A wait or a promise is a loop: `lf loop … --key KEY` (it lands in the outline
+  under its ticket). A plain step with nobody to wait on and no deadline is just an item:
+  `lf outline add "call Jim" --under m4p2` (or `--key KEY`, `--after ID`, `--top`, `--note` for a
+  bullet without a checkbox). `lf outline check ID "outcome"`, `uncheck`, `edit ID "text"`,
+  `note ID "a line of context"`, `move ID --under ID`, `rm ID`. Checking a loop off logs it like `lf done`.
+- **Editing the file directly** is fine for bigger rewrites: keep every `^id` exactly, 2 spaces per
+  level, fields joined by ` · `; never reformat lines you are not changing. Prefer `lf outline …`
+  for single changes: it keeps ids, turns "by tomorrow" into a date and commits.
+- **Views.** `lf outline --lens active|today|waiting|expired|standup [--key KEY] [--find TEXT]`
+  shows what the lens picks with all its parents. "What is in progress?" → `--lens active`.
+- **History is git.** Every change to the outline is a commit (`outline (lf|ui|hand): …`). When
+  the user asks how a task evolved ("расскажи эволюцию задачи", "what happened with EXP-123"),
+  run `lf outline --history KEY` (or `--history ID` for one item and everything under it) and tell
+  the story **from that output**, in order, with dates; add the ticket's `## Log` if it helps.
+  "What was the plan on Monday?" → `lf outline --at 2026-10-12`; "what changed this week?" →
+  `lf outline --days --since -6d`. Never reconstruct history from memory.
+- **First run**: if `outline.md` does not exist, `lf outline --migrate --dry-run`, show the user,
+  then `lf outline --migrate` (open loops plus the closed steps from each ticket's Log).
 - `lf watch --plist` prints a launchd agent for the 15-minute check; installing it is the user's
   decision (`~/Library/LaunchAgents`, then `launchctl load`).
 
@@ -195,8 +231,8 @@ the report — `lf commit` first.
 - `lf inbox --group activity|mine|tracked|waiting` — smart groups: unread changes in the user's and
   tracked tickets, assigned to them, tracked, waiting on someone. `INBOX.md` has them in that order.
 - The web UI has smart folders over the whole vault (Activity, My Jira, Tracking, Waiting, No loops),
-  configurable in `localflow.json` → `smartFolders`; plus Loops and Standup pages that write the same
-  `loops.md` and `## Log` as the CLI.
+  configurable in `localflow.json` → `smartFolders`; plus the Outline page (the tree, lenses, history),
+  and Loops and Standup pages; all of them write the same `outline.md`, `loops.md` and `## Log` as the CLI.
 - `lf ls` — open tickets by status; `--mine`, `--unread`, `--status done`, `--all`, `--project P`,
   `--by jira` to group by Jira's status.
 - Text search — Grep over `projects/**/ticket.md` and `notes.md`. There is deliberately no vector search.

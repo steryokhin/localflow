@@ -71,6 +71,8 @@ makes that true at Atlassian's end too. Scoped tokens may need `baseUrl` pointed
       *.md, anything else     yours: the sync never touches it
     WORK/WORK-001-slug/       a local ticket of your own (ticket.md is editable)
   notes/                      plain notes outside the board (journal, decisions, …)
+  outline.md                  yours: one tree of tickets → steps → subtasks → waits (committed on every change)
+  loops.md                    the open loops of outline.md, one line each (editable)
 ```
 
 The sync owns only `ticket.md`, `attachments/` and `raw/`. Your workflow status (`inbox`,
@@ -93,6 +95,10 @@ sync; when Jira has moved further than your status, `lf ls` points it out.
 | `lf create PREFIX "title"` | a local ticket of your own |
 | `lf open [KEY]` / `lf path KEY` | open in your editor / print the folder path |
 | `lf commit [-m MSG]` | commit your own files (notes) to the vault's local git |
+| `lf loop` / `lf done` / `lf bump` / `lf loops` | open loops: what you wait for, from whom, until when (see `lf help`) |
+| `lf outline [--lens L] [--key K] [--find T]` | the outline tree through a lens: all, active, today, waiting, expired, standup |
+| `lf outline --at DAY` / `--history KEY\|ID` / `--days` | the outline as it was on a day, how a ticket or an item evolved, changes day by day |
+| `lf outline add\|check\|edit\|note\|move\|rm …` | edit items by id; `lf outline --migrate` moves loops.md in |
 | `lf report [--date D] [--write]` | the day, from the vault's git history and the session log; no model involved |
 | `lf serve [--port 7420] [--open]` | the local web UI (see below) |
 | `lf doctor [--offline]` | check runtime, vault, token and Jira access |
@@ -163,6 +169,18 @@ document stays rendered, the block you click shows its Markdown, leaving it rend
 saves, and so does a pause. The page follows the vault: files added or changed by `lf`, an agent
 or your editor appear without a reload, and an open editor is never overwritten.
 
+**Outline.** The first nav entry is the Outline: `outline.md` as one editable tree, like an
+outliner (Bike, Workflowy). Enter makes the next item (at the start of a line: one above), Tab /
+Shift-Tab indent and outdent with children, ⌥↑ / ⌥↓ move a branch, ⌘↵ checks off, ⇧↵ edits the
+note under an item, ⌘. folds, ⌘] / ⌘[ focus in and out of a branch, Esc selects rows (⇧↑↓ to
+extend, then Tab, ⌥↑↓, ⌫, ⌘C), ⌘Z undoes; rows also drag by their handle. Typing
+`· from Jim · by tomorrow` turns an item into a loop with chips (late ones in red). Lenses on top
+— All, Active, Today, Waiting, Expired, Standup — and a filter keep the parents of what they show.
+Changes made by `lf` or an agent appear live and glow for a few seconds. *History* (⌥H) shows an
+item's or a ticket's life and the outline day by day; a past day opens read-only. Edits from the
+page are committed after a short pause (`outline (ui): …`), edits made in another editor while the
+UI runs too (`outline (hand): …`).
+
 **Groups.** The first nav section is *Groups*: *All*, then one entry per group with open/unread
 counts. A ticket's group is the `group:` key in its `notes.md`; without it the group is the
 project prefix, so existing tickets show up under `HCOMHOT` or `WORK` with no migration. The `+`
@@ -217,9 +235,6 @@ The rules an agent follows when working with `lf` are in `skills/localflow/SKILL
 `install.sh` links them into `~/.claude/skills/localflow`. The repository's `CLAUDE.md` imports
 the same file.
 
-`skills/localflow-outline/SKILL.md` is the trial-week skill for `<vault>/outline.md` (LFLOW-024):
-converting the current loops into the tree and keeping it in step with `lf`. `install.sh` links it
-into `~/.claude/skills/localflow-outline`.
 
 ## Tests
 

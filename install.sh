@@ -4,7 +4,6 @@
 #
 #   ~/.local/bin/lf                       -> <repo>/bin/lf
 #   ~/.claude/skills/localflow    -> <repo>/skills/localflow
-#   ~/.claude/skills/localflow-outline -> <repo>/skills/localflow-outline
 
 set -eu
 
@@ -26,7 +25,8 @@ link() {
 chmod +x "$ROOT/bin/lf"
 link "$ROOT/bin/lf" "$BIN_DIR/lf"
 link "$ROOT/skills/localflow" "$SKILLS_DIR/localflow"
-link "$ROOT/skills/localflow-outline" "$SKILLS_DIR/localflow-outline"
+# The outline trial-week skill was folded into the main one (LFLOW-024): drop its old link.
+if [ -L "$SKILLS_DIR/localflow-outline" ]; then rm "$SKILLS_DIR/localflow-outline" && echo "removed $SKILLS_DIR/localflow-outline (now part of localflow)"; fi
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
