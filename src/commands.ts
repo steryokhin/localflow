@@ -28,6 +28,7 @@ import type { Loop } from "./vault/loops.ts";
 import { appendTicketLog, notesText, readLog, setTracked } from "./vault/notes.ts";
 import { beginWork, repoOf, setRepo } from "./vault/scaffold.ts";
 import { launchdPlist, refreshActions, watchOnce } from "./watch.ts";
+import { commitOutline } from "./vault/outline-history.ts";
 import { loadState, saveState, unreadByTicket } from "./vault/state.ts";
 import type { State, UnreadEvent } from "./vault/state.ts";
 import { SMART_GROUPS, inSmartGroup, waitingByKey } from "./vault/smart.ts";
@@ -554,6 +555,12 @@ export function cmdWatch(vault: string, opts: { plist?: boolean; quiet?: boolean
     return;
   }
   const r = watchOnce(vault, new Date(), { notify: !opts.quiet });
+  // Edits made to the outline in another editor go into its history here (lf's own are committed as they happen).
+  try {
+    commitOutline(vault, "hand", ["edited outside lf"]);
+  } catch (e) {
+    out(`outline not committed: ${(e as Error).message}`);
+  }
   const note = r.notified ? " · notified" : r.quiet && (r.fresh.expired.length || r.fresh.soon.length) ? " · quiet hours, no notification" : "";
   out(`expired ${r.expired.length} · within the hour ${r.soon.length}${note} → ${path.join(vault, NUDGES_FILE)}`);
 }

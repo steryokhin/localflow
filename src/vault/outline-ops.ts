@@ -132,6 +132,8 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
           const n = toNew(op.item, taken, now, opts.workdayEnd);
           apply(m, insertItem(m.o, resolvePlace(m, op.place, ids), n));
           if (op.temp) ids[op.temp] = n.id;
+          // The client's own id comes back too, so it can see when a clash made the server pick another.
+          if (op.item.id) ids[op.item.id] = n.id;
           const it = m.o.byRef.get(n.id)!;
           if (loopOf(it)) effects.push({ kind: "track", key: it.section.key });
           m.summary.push(`add ${n.id}: ${n.text}`);

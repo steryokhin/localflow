@@ -127,3 +127,16 @@ test("an extra host (Cloud media) is reachable via redirect, without the Jira cr
     media.close();
   }
 });
+
+test("the web UI loads nothing from other origins; its CSP keeps every request on this server", () => {
+  const ui = path.join(SRC, "serve", "ui");
+  for (const f of fs.readdirSync(ui)) {
+    const text = fs.readFileSync(path.join(ui, f), "utf8");
+    assert.doesNotMatch(text, /(?:src|href)\s*=\s*["']https?:\/\//i, `${f}: an external script, style or link`);
+    assert.doesNotMatch(text, /(?:fetch|import)\(\s*["'`]https?:\/\//, `${f}: a request to another origin`);
+    assert.doesNotMatch(text, /@import|url\(\s*["']?https?:\/\//i, `${f}: an external stylesheet or image`);
+    assert.doesNotMatch(text, /XMLHttpRequest|WebSocket|EventSource|sendBeacon/, `${f}: another network API`);
+  }
+  const server = fs.readFileSync(path.join(SRC, "serve", "server.ts"), "utf8");
+  assert.match(server, /"content-security-policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'"/);
+});
