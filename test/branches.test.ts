@@ -70,7 +70,7 @@ test("lf done --next keeps the branch and writes after; the card's history reads
   await run(() => cmdLoop(vault, "a11y ticket filed", { key: "WORK-001", by: "+1d", tag: "a11y" }));
   const qa = byText("QA check");
   const outText = await run(() => cmdDone(vault, qa.id, "Lena: passes on Pixel", { text: "fix the Samsung edge case", by: "+2d" }));
-  assert.match(outText, /#android \(after L\d+\)/);
+  assert.match(outText, new RegExp(`#android \\(after ${qa.id}\\)`));
   const next = byText("fix the Samsung edge case");
   assert.equal(next.tag, "android");
   assert.equal(next.after, qa.id);

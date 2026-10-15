@@ -7,7 +7,6 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { cmdCreate, cmdInit } from "../src/commands.ts";
 import { bucket, idleTickets, lastWorkingDay, renderActions, renderStandup } from "../src/render/loops.ts";
-import { loadState } from "../src/vault/state.ts";
 import { addLoop, bumpLoop, closeLoop, dueAt, parseWhen, readLoops, syncLoops } from "../src/vault/loops.ts";
 import { appendToSection, readLog, setTracked } from "../src/vault/notes.ts";
 import { findTicket, listTickets } from "../src/vault/store.ts";
@@ -20,6 +19,7 @@ const read = (rel: string): string => fs.readFileSync(path.join(vault, rel), "ut
 const notes = (key: string): string => fs.readFileSync(path.join(findTicket(vault, key)!.dir, "notes.md"), "utf8");
 // Monday 12 Oct 2026, 11:00 local time.
 const MON = new Date(2026, 9, 12, 11, 0);
+const idOf = (text: string): string => readLoops(vault).find((l) => l.text === text)!.id;
 
 before(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "localflow-loops-")));
@@ -65,22 +65,25 @@ test("appendToSection adds to the end of a section and leaves the rest alone", (
 
 test("lf loop writes one line per loop, tracks the ticket, and closing logs it", () => {
   const a = addLoop(vault, { text: "PR #41 review", key: "work-001", owner: "Tom", by: "18:00", onExpiry: "ping in #ios-reviews" }, MON);
-  assert.equal(a.id, "L1");
-  assert.match(read("loops.md"), /^- \[ \] L1 · 2026-10-12 11:00 · WORK-001 · PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews$/m);
+  assert.match(a.id, /^[a-z][2-9][a-z][2-9]$/, "new ids are short and random, like Bike's");
+  assert.match(read("loops.md"), new RegExp(`^- \\[ \\] \\^${a.id} · 2026-10-12 11:00 · WORK-001 · PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews$`, "m"));
+  assert.match(read("outline.md"), new RegExp(`^## WORK-001 · Swipe fix\n- \\[ \\] PR #41 review · from Tom · by 2026-10-12 18:00 · else: ping in #ios-reviews · opened 2026-10-12 11:00 \\^${a.id}$`, "m"));
   assert.match(notes("WORK-001"), /^tracked: true$/m);
   const b = addLoop(vault, { text: "Istio docs · onboarding", by: "2026-10-15" }, MON);
   assert.equal(b.owner, "me");
-  assert.match(read("loops.md"), /L2 · 2026-10-12 11:00 · — · Istio docs - onboarding · from me · by 2026-10-15$/m, "the separator never leaks into text");
+  assert.match(read("loops.md"), new RegExp(`\\^${b.id} · 2026-10-12 11:00 · — · Istio docs - onboarding · from me · by 2026-10-15$`, "m"), "the separator never leaks into text");
 
-  const closed = closeLoop(vault, "L1", "Tom approved, 2 comments", new Date(2026, 9, 12, 17, 40));
+  const closed = closeLoop(vault, a.id, "Tom approved, 2 comments", new Date(2026, 9, 12, 17, 40));
   assert.equal(closed.loggedTo, `${findTicket(vault, "WORK-001")!.rel}/notes.md`);
-  assert.doesNotMatch(read("loops.md"), /L1 ·/);
-  assert.match(notes("WORK-001"), /## Log\n\n- 2026-10-12 17:40 — Tom approved, 2 comments \(L1: PR #41 review, from Tom\)\n$/);
+  assert.doesNotMatch(read("loops.md"), new RegExp(`${a.id} ·`));
+  assert.match(read("outline.md"), new RegExp(`^- \\[x\\] PR #41 review .*\\^${a.id}$`, "m"), "a closed loop stays in the outline, checked off");
+  assert.match(notes("WORK-001"), new RegExp(`## Log\\n\\n- 2026-10-12 17:40 — Tom approved, 2 comments \\(${a.id}: PR #41 review, from Tom\\)\\n$`));
 
   closeLoop(vault, "istio", "", new Date(2026, 9, 12, 18, 0));
-  assert.match(read("loops-archive.md"), /^# Closed loops without a ticket\n\n- 2026-10-12 18:00 — done \(L2: Istio docs - onboarding\)\n$/);
-  assert.equal(addLoop(vault, { text: "next", by: "+1h" }, MON).id, "L3", "closed ids are not reused");
-  closeLoop(vault, "L3", "", MON);
+  assert.match(read("loops-archive.md"), new RegExp(`^# Closed loops without a ticket\\n\\n- 2026-10-12 18:00 — done \\(${b.id}: Istio docs - onboarding\\)\\n$`));
+  const c = addLoop(vault, { text: "next", by: "+1h" }, MON);
+  assert.ok(![a.id, b.id].includes(c.id), "closed ids are not reused: they stay in the outline");
+  closeLoop(vault, c.id, "", MON);
 });
 
 test("loops are found by id or by a word; ambiguous and too-short queries are refused", () => {
@@ -91,28 +94,32 @@ test("loops are found by id or by a word; ambiguous and too-short queries are re
   assert.throws(() => closeLoop(vault, "L99", "", MON), /at least 3 letters|No open loop/);
   const r = bumpLoop(vault, "sign-off", "2026-10-20 12:00", MON);
   assert.equal(r.was, "2026-10-14 11:00");
-  assert.match(notes("WORK-002"), /- 2026-10-12 11:00 — L5 moved to 2026-10-20 12:00 \(was 2026-10-14 11:00\): QA sign-off/);
+  assert.match(notes("WORK-002"), new RegExp(`- 2026-10-12 11:00 — ${idOf("QA sign-off")} moved to 2026-10-20 12:00 \\(was 2026-10-14 11:00\\): QA sign-off`));
 });
 
-test("hand-written lines are understood (Russian markers too) and get an id", () => {
+test("hand-written lines are understood (Russian markers too); reads never write, the next write stores the id", () => {
   fs.appendFileSync(path.join(vault, "loops.md"), "- [ ] 2026-10-12 · — · написал Mark про BFF-кэш · от Mark · до 2026-10-14 · иначе: поднять на дейли\n- [x] done by hand, ignored\n");
+  const before = read("loops.md");
   const loops = syncLoops(vault);
   const mark = loops.find((l) => l.owner === "Mark")!;
-  assert.equal(mark.id, "L6");
+  assert.match(mark.id, /^[a-z][2-9][a-z][2-9]$/);
   assert.equal(mark.due, "2026-10-14");
   assert.equal(mark.onExpiry, "поднять на дейли");
-  assert.match(read("loops.md"), /^- \[ \] L6 · 2026-10-12 · — · написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли$/m);
+  assert.equal(read("loops.md"), before, "a read writes nothing");
+  assert.equal(syncLoops(vault).find((l) => l.owner === "Mark")!.id, mark.id, "the same id on every read");
+  closeLoop(vault, addLoop(vault, { text: "any write", by: "+1h" }, MON).id, "", MON);
+  assert.match(read("loops.md"), new RegExp(`^- \\[ \\] \\^${mark.id} · 2026-10-12 · — · написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли$`, "m"));
   assert.match(read("loops.md"), /^- \[x\] done by hand, ignored$/m);
-  assert.equal(loadState(vault).loopSeq, 6);
+  assert.match(read("outline.md"), new RegExp(`^## No ticket\n(- .*\n)*- \\[ \\] написал Mark про BFF-кэш · from Mark · by 2026-10-14 · else: поднять на дейли · opened 2026-10-12 \\^${mark.id}$`, "m"));
 });
 
 test("the board puts expired loops first and lists tracked tickets that have nothing going on", () => {
   const loops = readLoops(vault);
   const later = new Date(2026, 9, 14, 12, 0); // Wed: the QA feedback (13 Oct) and Mark (14 Oct, all day) are due
   const b = bucket(loops, later);
-  assert.deepEqual(b.expired.map((l) => l.id), ["L4"]);
-  assert.deepEqual(b.today.map((l) => l.id), ["L6"]);
-  assert.deepEqual(b.waiting.map((l) => l.id), ["L5"]);
+  assert.deepEqual(b.expired.map((l) => l.id), [idOf("QA feedback on build 1.0.4")]);
+  assert.deepEqual(b.today.map((l) => l.id), [idOf("написал Mark про BFF-кэш")]);
+  assert.deepEqual(b.waiting.map((l) => l.id), [idOf("QA sign-off")]);
 
   setTracked(findTicket(vault, "WORK-003")!, true);
   assert.deepEqual(idleTickets(listTickets(vault), loops).map((t) => t.key), ["WORK-003"]);
@@ -120,7 +127,7 @@ test("the board puts expired loops first and lists tracked tickets that have not
   assert.deepEqual(idleTickets(listTickets(vault), loops).map((t) => t.key), ["WORK-003"], "a plan is not a loop: the ticket still needs one");
 
   const board = renderActions(loops, listTickets(vault), later);
-  assert.match(board, /## 🐸 Expired \(1\)\n\n- L4 · WORK-001 · QA feedback on build 1\.0\.4 · from Lena · was due 13 Oct, \d+h ago/);
+  assert.match(board, new RegExp(`## 🐸 Expired \\(1\\)\\n\\n- ${idOf("QA feedback on build 1.0.4")} · WORK-001 · QA feedback on build 1\.0\.4 · from Lena · was due 13 Oct, \\d+h ago`));
   assert.ok(board.indexOf("Expired") < board.indexOf("Due today") && board.indexOf("Due today") < board.indexOf("Waiting on people"));
 });
 
@@ -133,7 +140,7 @@ test("watch writes NUDGES.md and notifies once per loop and deadline, never in q
   assert.match(calls[0], /^Expired — Lena: QA feedback on build 1\.0\.4 \(WORK-001\)$/m);
   assert.match(read("NUDGES.md"), /## Expired \(1\)/);
   assert.match(read("ACTIONS.md"), /# Loops — Wed 14 Oct 2026/);
-  assert.deepEqual(r.fresh.expired.map((l) => l.id), ["L4"]);
+  assert.deepEqual(r.fresh.expired.map((l) => l.id), [idOf("QA feedback on build 1.0.4")]);
 
   watchOnce(vault, new Date(2026, 9, 14, 12, 15), { notifier });
   assert.equal(calls.length, 1, "already announced");
@@ -146,7 +153,7 @@ test("watch writes NUDGES.md and notifies once per loop and deadline, never in q
   assert.equal(calls.length, 2, "announced once the quiet hours are over");
   assert.match(calls[1], /Mark/);
 
-  bumpLoop(vault, "L4", "2026-10-15 09:30", new Date(2026, 9, 15, 9, 0));
+  bumpLoop(vault, idOf("QA feedback on build 1.0.4"), "2026-10-15 09:30", new Date(2026, 9, 15, 9, 0));
   watchOnce(vault, new Date(2026, 9, 15, 9, 5), { notifier });
   assert.equal(calls.length, 3, "a moved deadline is announced again");
   assert.match(calls[2], /^Soon — Lena/);
@@ -166,7 +173,7 @@ test("standup: done since the last working day, my loops for today, waiting and 
   assert.equal(lastWorkingDay(MON).getDate(), 9, "Monday looks back to Friday");
   const thu = new Date(2026, 9, 15, 9, 30);
   const text = renderStandup(vault, readLoops(vault), listTickets(vault), thu, false);
-  assert.match(text, /^Standup — Thu 15 Oct\n\nDone \(since Wed 14 Oct\):\n- WORK-001: L4 moved to 2026-10-15 09:30/);
+  assert.match(text, new RegExp(`^Standup — Thu 15 Oct\\n\\nDone \\(since Wed 14 Oct\\):\\n- WORK-001: ${idOf("QA feedback on build 1.0.4")} moved to 2026-10-15 09:30`));
   assert.match(text, /Doing today:\n- no loops of mine due today\n/);
   const fri = new Date(2026, 9, 16, 9, 30);
   const week = renderStandup(vault, readLoops(vault), listTickets(vault), fri, true);

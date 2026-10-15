@@ -16,6 +16,8 @@ export interface State {
   seen: Record<string, string>;
   /** Last loop number handed out (`L<n>` in loops.md), so a closed loop's id is never reused. */
   loopSeq?: number;
+  /** Loop id -> its loops.md line as lf last wrote it: what tells a hand edit there from an outline edit. */
+  loopsBase?: Record<string, string>;
 }
 
 const STATE_FILE = "state.json";
@@ -35,7 +37,7 @@ function readJson<T>(vault: string, file: string, fallback: T): T {
 
 export function loadState(vault: string): State {
   const s = readJson<Partial<State>>(vault, STATE_FILE, {});
-  return { me: s.me ?? null, lastSync: s.lastSync ?? null, seen: s.seen ?? {}, ...(s.loopSeq ? { loopSeq: s.loopSeq } : {}) };
+  return { me: s.me ?? null, lastSync: s.lastSync ?? null, seen: s.seen ?? {}, ...(s.loopSeq ? { loopSeq: s.loopSeq } : {}), ...(s.loopsBase ? { loopsBase: s.loopsBase } : {}) };
 }
 
 export function saveState(vault: string, state: State): void {
