@@ -740,6 +740,8 @@
       if (!this.sections.length) {
         h = `<div class="ol-empty"><p>The outline is empty.</p><p>Add a section for a ticket below, or bring your open loops and their closed steps in from loops.md.</p>` +
           `<button class="btn" data-migrate>Bring loops.md in</button></div>`;
+      } else if (target && target.item && !target.item.children.length) {
+        h += `<div class="ol-none">Nothing under it yet: ↵ at the end of the title adds the first step.</div>`;
       } else if (!rows.length && !(target && target.item)) {
         h += `<div class="ol-none">Nothing here${this.query ? ` matching “${esc(this.query)}”` : ` in ${esc(this.lens)}`}.</div>`;
       }
@@ -782,6 +784,7 @@
       const foot = this.root.querySelector(".ol-foot");
       if (this.snapshot) { foot.innerHTML = ""; return; }
       const tickets = (this.view && this.view.tickets) || [];
+      if (this.hoistTarget()) { foot.innerHTML = ""; return; }
       if (!this.addingSection) {
         foot.innerHTML = `<button class="ol-add" data-addsec>+ Section</button>`;
       } else {
@@ -1144,7 +1147,10 @@
           ops.push({ op: "text", id, text: before });
           inverse.push({ op: "text", id, text });
         }
-        const intoKids = node.children.length && !this.folded.has(id) && !after;
+        // The title of a focused branch, or an open parent: the new item is its first child.
+        const target = this.hoistTarget();
+        const isTitle = !!(target && target.item && target.item.id === id);
+        const intoKids = isTitle || (node.children.length && !this.folded.has(id) && !after);
         const place = intoKids ? { parent: id, index: 0 } : { after: id };
         ops.push({ op: "insert", place, item: { id: nid, text: after, check: kind, context: [] } });
         this.act(ops, inverse, { id: nid, offset: 0 });
