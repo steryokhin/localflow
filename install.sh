@@ -4,6 +4,7 @@
 #
 #   ~/.local/bin/lf                       -> <repo>/bin/lf
 #   ~/.claude/skills/localflow    -> <repo>/skills/localflow
+#   ~/.claude/skills/localflow-outline -> <repo>/skills/localflow-outline
 
 set -eu
 
@@ -25,6 +26,7 @@ link() {
 chmod +x "$ROOT/bin/lf"
 link "$ROOT/bin/lf" "$BIN_DIR/lf"
 link "$ROOT/skills/localflow" "$SKILLS_DIR/localflow"
+link "$ROOT/skills/localflow-outline" "$SKILLS_DIR/localflow-outline"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;

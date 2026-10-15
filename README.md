@@ -217,6 +217,10 @@ The rules an agent follows when working with `lf` are in `skills/localflow/SKILL
 `install.sh` links them into `~/.claude/skills/localflow`. The repository's `CLAUDE.md` imports
 the same file.
 
+`skills/localflow-outline/SKILL.md` is the trial-week skill for `<vault>/outline.md` (LFLOW-024):
+converting the current loops into the tree and keeping it in step with `lf`. `install.sh` links it
+into `~/.claude/skills/localflow-outline`.
+
 ## Tests
 
 ```bash
