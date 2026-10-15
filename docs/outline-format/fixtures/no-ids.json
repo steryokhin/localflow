@@ -1,0 +1,26 @@
+[
+  {
+    "key": "A-1",
+    "title": "Hand-written",
+    "closed": false,
+    "items": [
+      {
+        "id": null,
+        "check": " ",
+        "text": "first step",
+        "children": [
+          {
+            "id": null,
+            "check": " ",
+            "text": "nested step"
+          }
+        ]
+      },
+      {
+        "id": null,
+        "check": " ",
+        "text": "second step · from Tom · by 2026-10-20"
+      }
+    ]
+  }
+]

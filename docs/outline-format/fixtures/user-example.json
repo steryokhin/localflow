@@ -1,0 +1,65 @@
+[
+  {
+    "key": "PROJ-1",
+    "title": "Login crash on swipe",
+    "closed": false,
+    "items": [
+      {
+        "id": "k3f9",
+        "check": "x",
+        "text": "reproduce on iOS 26"
+      },
+      {
+        "id": "m4p2",
+        "check": " ",
+        "text": "research issue #123",
+        "children": [
+          {
+            "id": "a2b3",
+            "check": "x",
+            "text": "call Jim"
+          },
+          {
+            "id": "c4d5",
+            "check": "x",
+            "text": "discuss with Tom",
+            "context": [
+              "Tom: the crash is in the swipe handler, not the cache"
+            ]
+          },
+          {
+            "id": "e6f7",
+            "check": " ",
+            "text": "#android review",
+            "children": [
+              {
+                "id": "g8h9",
+                "check": "x",
+                "text": "ask Jim to review",
+                "children": [
+                  {
+                    "id": "L7",
+                    "check": " ",
+                    "text": "wait for Jim's review · from Jim · by 2026-10-15 12:00 · else: ping in #ios"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "key": "PROJ-2",
+    "title": "Payments",
+    "closed": true,
+    "items": [
+      {
+        "id": "j2k3",
+        "check": "x",
+        "text": "ship the fix"
+      }
+    ]
+  }
+]

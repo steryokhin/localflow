@@ -1,0 +1,68 @@
+[
+  {
+    "key": null,
+    "title": "Inbox",
+    "closed": false,
+    "items": [
+      {
+        "id": "n2p3",
+        "check": " ",
+        "text": "ask Lena about onboarding · from Lena · by someday"
+      },
+      {
+        "id": "q4r5",
+        "check": null,
+        "text": "plain note, no checkbox"
+      },
+      {
+        "id": "s6t7",
+        "check": null,
+        "text": "star bullet"
+      }
+    ]
+  },
+  {
+    "key": "WORK-7",
+    "title": "Mixed",
+    "closed": false,
+    "items": [
+      {
+        "id": "u8v9",
+        "check": "x",
+        "text": "closed parent",
+        "children": [
+          {
+            "id": "w2x3",
+            "check": " ",
+            "text": "still open child",
+            "context": [
+              "a quote line right under a child is the child's context"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "y4z5",
+        "check": " ",
+        "text": "long context",
+        "context": [
+          "first line",
+          "",
+          "after an empty quote line"
+        ],
+        "children": [
+          {
+            "id": "b6c7",
+            "check": " ",
+            "text": "tab-indented child"
+          }
+        ]
+      },
+      {
+        "id": "d8e9",
+        "check": "x",
+        "text": "capital X is done"
+      }
+    ]
+  }
+]
