@@ -1,0 +1,165 @@
+/* The Outline page (outline.js). Uses the tokens of app.css, so light and dark follow it. */
+
+.ol-page { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--win); }
+.ol-bar { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--win); flex-wrap: wrap; }
+.ol-lenses { display: inline-flex; background: var(--sunk); border-radius: 8px; padding: 2px; gap: 1px; }
+.ol-lenses button { border: 0; background: none; padding: 4px 10px; border-radius: 6px; font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.ol-lenses button span { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ol-lenses button:hover { color: var(--text); }
+.ol-lenses button.on { background: var(--raise); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); font-weight: 550; }
+.ol-lenses button.on span { color: var(--muted); }
+.ol-q { flex: 0 1 220px; min-width: 120px; border: 1px solid var(--line); background: var(--raise); border-radius: 7px; padding: 4px 9px; font-size: 12.5px; outline: none; }
+.ol-q:focus { border-color: var(--accent); }
+.ol-status { margin-left: auto; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+.ol-status.err { color: var(--del); }
+.ol-status.ext { color: var(--new); }
+.ol-help { padding: 3px 8px; }
+
+.ol-wrap { flex: 1; display: flex; min-height: 0; }
+.ol-scroll { flex: 1; overflow: auto; min-width: 0; }
+.ol-crumbs { max-width: 860px; margin: 18px auto 0; padding: 0 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12.5px; color: var(--faint); }
+.ol-crumbs button { border: 0; background: none; padding: 2px 4px; border-radius: 4px; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ol-crumbs button:hover { background: var(--sunk); color: var(--text); }
+.ol-body { max-width: 860px; margin: 0 auto; padding: 18px 40px 30px; outline: none; }
+.ol-foot { max-width: 860px; margin: 0 auto 80px; padding: 0 40px; }
+.ol-add { border: 0; background: none; color: var(--faint); padding: 6px 4px; font-size: 13px; }
+.ol-add:hover { color: var(--accent); }
+.ol-secform { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--faint); }
+.ol-secform select, .ol-secform input { border: 1px solid var(--line-strong); background: var(--raise); border-radius: 6px; padding: 4px 8px; font-size: 12.5px; max-width: 320px; }
+.ol-empty { text-align: center; color: var(--muted); padding: 60px 20px; font-size: 14px; }
+.ol-none { color: var(--faint); padding: 16px 30px; font-size: 13.5px; }
+
+/* ---------- section heads ---------- */
+.ol-head { display: flex; align-items: center; gap: 8px; margin: 26px 0 6px -26px; padding: 2px 0; position: relative; }
+.ol-head:first-child { margin-top: 4px; }
+.ol-head .ol-key { font-size: 12px; font-weight: 650; color: var(--muted); background: var(--sunk); border-radius: 5px; padding: 2px 6px; text-decoration: none; font-variant-numeric: tabular-nums; }
+.ol-head .ol-key:hover { color: var(--accent); }
+.ol-htitle { font-size: 19px; font-weight: 650; letter-spacing: -.01em; outline: none; border-radius: 4px; padding: 0 2px; min-width: 40px; }
+.ol-htitle:focus { background: var(--sunk); }
+.ol-head.closed .ol-htitle { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.ol-st { font-size: 11px; color: var(--muted); background: var(--sunk); padding: 1px 7px; border-radius: 10px; }
+.ol-st.inprogress { color: var(--js-prog); background: var(--js-prog-bg); }
+.ol-st.inreview { color: var(--warn); background: var(--warn-bg); }
+.ol-st.done { color: var(--js-done); background: var(--js-done-bg); }
+.ol-hacts { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.ol-head:hover .ol-hacts, .ol-head:focus-within .ol-hacts { opacity: 1; }
+.ol-hacts button { border: 0; background: none; color: var(--faint); width: 24px; height: 24px; border-radius: 5px; font-size: 13px; }
+.ol-hacts button:hover { background: var(--sunk); color: var(--text); }
+.ol-head .ol-fold { position: static; }
+
+/* ---------- rows ---------- */
+.ol-row { position: relative; display: flex; align-items: flex-start; gap: 4px; padding: 1px 0 1px calc(var(--d, 0) * 26px); border-radius: 6px; min-height: 30px; }
+/* One faint guide line per level, under the parent's checkbox. */
+.ol-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--d, 0) * 26px); pointer-events: none;
+  background: repeating-linear-gradient(90deg, transparent 0 8px, var(--line) 8px 9px, transparent 9px 26px); }
+.ol-row:hover { background: color-mix(in srgb, var(--sunk) 55%, transparent); }
+.ol-row.editing { background: none; }
+.ol-row.sel { background: var(--accent-soft); }
+.ol-row.dragging { opacity: .35; }
+.ol-grip { position: absolute; left: calc(var(--d, 0) * 26px - 44px); top: 5px; width: 18px; height: 20px; font-size: 11px; letter-spacing: -2px; color: var(--faint);
+  display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: grab; opacity: 0; user-select: none; }
+.ol-row:hover .ol-grip, .ol-row.sel .ol-grip { opacity: 1; }
+.ol-grip:hover { background: var(--sunk); color: var(--text); }
+.ol-fold { flex: none; width: 18px; height: 28px; border: 0; background: none; color: var(--faint); font-size: 10px; padding: 0; margin-left: -22px; transition: transform .12s, opacity .12s; opacity: 0; }
+.ol-row:hover .ol-fold, .ol-fold.folded, .ol-head .ol-fold { opacity: 1; }
+.ol-fold.folded { transform: rotate(-90deg); }
+.ol-fold.none { visibility: hidden; }
+.ol-head .ol-fold { margin-left: 0; height: 22px; opacity: .6; }
+.ol-head:hover .ol-fold { opacity: 1; }
+.ol-box { flex: none; width: 17px; height: 17px; margin: 6px 7px 0 0; border: 1.6px solid var(--line-strong); border-radius: 5px; background: var(--raise); padding: 0; position: relative; transition: background .1s, border-color .1s; }
+.ol-box:hover { border-color: var(--accent); }
+.ol-box.on { background: var(--accent); border-color: var(--accent); }
+.ol-box.on::after { content: ""; position: absolute; left: 4.5px; top: 1.5px; width: 4px; height: 8px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.ol-bul { flex: none; width: 17px; margin-right: 7px; text-align: center; font-size: 20px; line-height: 28px; color: var(--muted); cursor: pointer; border-radius: 50%; }
+.ol-bul:hover { color: var(--accent); }
+.ol-main { flex: 1; min-width: 0; }
+.ol-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+.ol-text { flex: 1 1 auto; min-width: 60px; font-size: 15px; line-height: 1.55; padding: 3px 0; outline: none; white-space: pre-wrap; word-break: break-word; caret-color: var(--accent); }
+.ol-text:empty::before { content: attr(data-ph); color: var(--faint); }
+.ol-row:not(.editing) .ol-text:empty::before { content: ""; }
+.ol-row.done > .ol-main .ol-text { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--faint) 60%, transparent); }
+.ol-row.note .ol-text { color: var(--text); }
+.ol-row.ol-title { padding-left: 0; margin-bottom: 8px; }
+.ol-row.ol-title .ol-text { font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+.ol-row.ol-title .ol-grip, .ol-row.ol-title .ol-fold { display: none; }
+
+.ol-chips { display: inline-flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.ol-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11.5px; font-weight: 500; white-space: nowrap; color: var(--muted); background: var(--sunk); border: 0; }
+.ol-chip.who { color: var(--accent); background: var(--accent-soft); }
+.ol-chip.due.today { color: var(--warn); background: var(--warn-bg); }
+.ol-chip.due.late { color: var(--p1); background: var(--p1-bg); font-weight: 600; }
+.ol-chip.else { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.ol-chip.ctx { cursor: pointer; }
+.ol-chip.ctx.on, .ol-chip.ctx:hover { color: var(--text); }
+.ol-chip.kids { cursor: pointer; }
+.ol-row.done .ol-chip { opacity: .65; }
+.ol-row.late .ol-box { border-color: var(--p1); }
+
+.ol-ctxt { margin: 0 0 6px; padding: 4px 0 4px 12px; border-left: 2px solid var(--line-strong); color: var(--muted); font-size: 13.5px; line-height: 1.5; cursor: text; }
+.ol-ctxt a { word-break: break-all; }
+.ol-ctxedit { display: block; width: 100%; margin: 2px 0 8px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 7px; background: var(--raise); font-size: 13.5px; line-height: 1.5; resize: vertical; outline: none; }
+
+.ol-menu { position: absolute; z-index: 20; top: 28px; left: calc(var(--d, 0) * 26px - 20px); min-width: 230px; background: var(--raise); border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .14); padding: 4px; display: flex; flex-direction: column; }
+.ol-menu button { border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 6px; font-size: 13px; display: flex; justify-content: space-between; gap: 16px; }
+.ol-menu button:hover { background: var(--sunk); }
+.ol-menu button.del { color: var(--del); }
+.ol-menu kbd, .ol-keysbox kbd { font: 11px var(--mono); color: var(--faint); }
+
+.ol-drop { position: absolute; height: 2px; background: var(--accent); border-radius: 2px; pointer-events: none; z-index: 30; }
+.ol-drop::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--accent); background: var(--win); }
+
+/* Changes from outside (the agent, lf, another editor) glow for a few seconds. */
+@keyframes ol-glow { 0%, 55% { background: var(--new-soft); box-shadow: inset 3px 0 0 var(--new); } 100% { background: transparent; box-shadow: inset 3px 0 0 transparent; } }
+.ol-row.flash-new, .ol-row.flash-changed { animation: ol-glow 6s ease-out; }
+
+/* ---------- a past day (read only) ---------- */
+.ol-banner { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin: 0 0 14px; padding: 9px 12px; border-radius: 8px; background: var(--new-soft); color: var(--text); font-size: 13px; }
+.ol-snap .ol-text { cursor: default; }
+.ol-snap .ol-grip, .ol-snap .ol-hacts { display: none; }
+.ol-row.mark-added { box-shadow: inset 3px 0 0 var(--js-done); background: color-mix(in srgb, var(--js-done-bg) 70%, transparent); }
+.ol-row.mark-checked { box-shadow: inset 3px 0 0 var(--accent); }
+.ol-row.mark-edited, .ol-row.mark-note { box-shadow: inset 3px 0 0 var(--new); }
+.ol-row.mark-moved { box-shadow: inset 3px 0 0 var(--muted); }
+.viewing .ol-lenses, .viewing .ol-q { opacity: .4; pointer-events: none; }
+
+/* ---------- history panel ---------- */
+.ol-hist { width: 340px; flex: none; border-left: 1px solid var(--line); background: var(--side); overflow: auto; display: flex; flex-direction: column; }
+.oh-tabs { position: sticky; top: 0; display: flex; gap: 2px; padding: 10px 12px 8px; background: var(--side); border-bottom: 1px solid var(--line); z-index: 1; }
+.oh-tabs button { border: 0; background: none; padding: 4px 9px; border-radius: 6px; font-size: 12.5px; color: var(--muted); }
+.oh-tabs button.on { background: var(--raise); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.oh-tabs .oh-x { margin-left: auto; font-size: 16px; }
+.oh-body { padding: 8px 14px 30px; }
+.oh-body h4 { margin: 12px 0 8px; font-size: 13px; font-weight: 650; }
+.oh-wait { color: var(--faint); font-size: 12.5px; padding: 10px 0; }
+.oh-days { display: flex; flex-direction: column; gap: 2px; }
+.oh-days button { border: 0; background: none; text-align: left; padding: 7px 9px; border-radius: 7px; display: flex; flex-direction: column; gap: 1px; }
+.oh-days button b { font-size: 13px; font-weight: 550; }
+.oh-days button span { font-size: 11.5px; color: var(--faint); }
+.oh-days button:hover { background: var(--sunk); }
+.oh-days button.on { background: var(--accent-soft); }
+.oh-tl { list-style: none; margin: 0; padding: 0; }
+.oh-day { font-size: 11.5px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 6px; }
+.oh-ev { display: grid; grid-template-columns: 18px 40px 1fr; gap: 0 4px; padding: 4px 0; font-size: 12.5px; align-items: start; }
+.oh-m { color: var(--muted); text-align: center; }
+.oh-ev.k-checked .oh-m { color: var(--accent); }
+.oh-ev.k-added .oh-m { color: var(--js-done); }
+.oh-ev.k-removed .oh-m { color: var(--del); }
+.oh-t { color: var(--faint); font-variant-numeric: tabular-nums; }
+.oh-txt { border: 0; background: none; padding: 0; text-align: left; color: var(--text); font-size: 12.5px; line-height: 1.45; }
+.oh-txt:hover { color: var(--accent); }
+.oh-ev.k-removed .oh-txt { text-decoration: line-through; color: var(--faint); }
+.oh-was, .oh-under { color: var(--faint); font-size: 11.5px; line-height: 1.4; }
+
+.ol-keys { position: absolute; inset: 0; background: rgba(0, 0, 0, .18); display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; z-index: 40; }
+.ol-keysbox { background: var(--raise); border-radius: 12px; padding: 16px 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, .2); min-width: 380px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.ol-keysbox h4 { margin: 0 0 6px; }
+.ol-keysbox div { display: grid; grid-template-columns: 110px 1fr; gap: 10px; }
+.ol-keysbox kbd { font-size: 12px; color: var(--text); }
+.ol-keysbox .btn { align-self: flex-end; margin-top: 8px; }
+
+@media (max-width: 760px) {
+  .ol-body, .ol-foot, .ol-crumbs { padding-left: 34px; padding-right: 14px; }
+  .ol-hist { position: absolute; right: 0; top: 0; bottom: 0; width: min(340px, 90vw); z-index: 25; box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
+}
+.ct > .ol-page { flex: 1; height: auto; }

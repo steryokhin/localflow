@@ -204,6 +204,7 @@ test("history: every write is a commit; the outline as of a day, an item's life,
   assert.match(git(vault, ["log", "-1", "--format=%s"]), /^outline \(lf\): check /);
 
   const life = itemHistory(vault, r.ids.h);
+  assert.doesNotThrow(() => JSON.stringify(life), "events are plain data (the web UI sends them)");
   assert.deepEqual(life.map((e) => e.kind), ["added", "added", "edited", "checked"]);
   assert.equal(life[1].text, "child step");
   assert.equal(life[2].was, "history root");

@@ -88,12 +88,13 @@ function toNew(t: TreeIn, taken: Set<string>, now: Date, workdayEnd?: string): N
   };
 }
 
-function resolvePlace(m: Model, p: PlaceIn, ids: Record<string, string>): Place {
+/** `moving`: the item being moved, which does not count among the siblings (see moveItem). */
+function resolvePlace(m: Model, p: PlaceIn, ids: Record<string, string>, moving?: Item): Place {
   const real = (id: string): string => ids[id] ?? id;
   if (p.after) {
     const it = m.o.byRef.get(real(p.after));
     if (!it) throw new UserError(`No item ^${p.after}.`);
-    const siblings = it.parent ? it.parent.children : it.section.items;
+    const siblings = (it.parent ? it.parent.children : it.section.items).filter((s) => s !== moving);
     return { parent: it.parent?.ref ?? null, section: it.section.key ?? `#${it.section.title}`, index: siblings.indexOf(it) + 1 };
   }
   return { parent: p.parent ? real(p.parent) : null, section: p.section, index: p.index };
@@ -169,7 +170,7 @@ export function applyOps(vault: string, ops: Op[], now: Date, opts: { workdayEnd
         }
         case "move": {
           const it = item(m, real(op.id));
-          apply(m, moveItem(m.o, it, resolvePlace(m, op.place, ids)));
+          apply(m, moveItem(m.o, it, resolvePlace(m, op.place, ids, it)));
           m.summary.push(`move ${it.ref}`);
           break;
         }

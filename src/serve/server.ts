@@ -13,6 +13,11 @@ import {
   syncTicket, ticketHistory, ticketView,
 } from "./api.ts";
 import type { SyncResult } from "./api.ts";
+import { outlineDay, outlineDays, outlineHistory, outlineOps, outlineView } from "./outline-api.ts";
+import { commitOutline } from "../vault/outline-history.ts";
+import { migrateOutline } from "../vault/outline-migrate.ts";
+import { LOOPS_FILE, outlineHooks } from "../vault/outline-store.ts";
+import { OUTLINE_FILE } from "../vault/outline.ts";
 import { linkFolder, unlinkFolder } from "../vault/links.ts";
 import { setRepo } from "../vault/scaffold.ts";
 import { requireTicket } from "../vault/store.ts";
@@ -45,6 +50,8 @@ const RAW_MIME: Record<string, string> = {
 
 export interface ServeOptions {
   port?: number;
+  /** Quiet period before the outline's changes are committed (default 20 s). */
+  commitDelayMs?: number;
   log?: (line: string) => void;
   /** Replaces the in-process sync (tests only: lets a sync be held open). */
   syncRunner?: (vault: string, key: string) => Promise<SyncResult>;
@@ -59,8 +66,10 @@ class HttpError extends Error {
 }
 
 function json(res: http.ServerResponse, status: number, data: unknown): void {
+  // Serialised first: a value that cannot be sent becomes a 500, not a half-written response.
+  const body = JSON.stringify(data);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(JSON.stringify(data));
+  res.end(body);
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -96,11 +105,12 @@ class ChangeFeed {
   #waiters: Array<() => void> = [];
   #timer: NodeJS.Timeout | null = null;
 
-  constructor(vault: string, say: (line: string) => void) {
+  constructor(vault: string, say: (line: string) => void, onFile?: (rel: string) => void) {
     try {
       const watcher = fs.watch(vault, { recursive: true }, (_event, name) => {
         const rel = String(name ?? "");
         if (rel === ".git" || rel.startsWith(".git/") || rel.endsWith(".tmp")) return;
+        onFile?.(rel);
         this.#bump();
       });
       watcher.on("error", (e) => say(`watch error: ${(e as Error).message}`));
@@ -137,12 +147,59 @@ class ChangeFeed {
   }
 }
 
+/**
+ * Commits outline.md and loops.md after a quiet period: edits from the page ("outline (ui)") and
+ * edits made in another editor while the UI runs ("outline (hand)"), so the history has them all.
+ */
+class OutlineCommitter {
+  #summary: string[] = [];
+  #timer: NodeJS.Timeout | null = null;
+  #vault: string;
+  #say: (line: string) => void;
+  #delay: number;
+
+  constructor(vault: string, say: (line: string) => void, delay: number) {
+    this.#vault = vault;
+    this.#say = say;
+    this.#delay = delay;
+  }
+
+  wrote(summary: string[]): void {
+    this.#summary.push(...summary);
+    this.touched();
+  }
+
+  touched(): void {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => this.flush(), this.#delay);
+    this.#timer.unref();
+  }
+
+  flush(): void {
+    if (this.#timer) clearTimeout(this.#timer);
+    this.#timer = null;
+    const summary = this.#summary;
+    this.#summary = [];
+    try {
+      commitOutline(this.#vault, summary.length ? "ui" : "hand", summary.length ? summary : ["edited outside lf"]);
+    } catch (e) {
+      this.#say(`outline commit failed: ${(e as Error).message}`);
+    }
+  }
+}
+
 export function startServer(vault: string, opts: ServeOptions = {}): Promise<http.Server> {
   assertLocalOnly(vault);
   // Replaced by the real port once listening, so that port 0 (ephemeral) passes the Host check.
   let port = opts.port ?? DEFAULT_PORT;
   const say = opts.log ?? (() => {});
-  const changes = new ChangeFeed(vault, say);
+  const committer = new OutlineCommitter(vault, say, opts.commitDelayMs ?? 20_000);
+  outlineHooks.afterWrite = (v, summary) => {
+    if (v === vault) committer.wrote(summary);
+  };
+  const changes = new ChangeFeed(vault, say, (rel) => {
+    if (rel === OUTLINE_FILE || rel === LOOPS_FILE) committer.touched();
+  });
   // One sync at a time per server: a second request while one runs gets 409.
   let syncing = false;
   const runSyncOnce = async (key: string): Promise<SyncResult> => {
@@ -179,7 +236,7 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
       if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "Method not allowed");
       if (url.pathname.startsWith("/raw/")) return serveRaw(res, rawFilePath(vault, decodeURIComponent(url.pathname.slice(5))));
       if (url.pathname === "/") return serveUi(res, path.join(UI_DIR, "app.html"));
-      if (/^\/app\.(css|js)$/.test(url.pathname)) return serveUi(res, path.join(UI_DIR, url.pathname.slice(1)));
+      if (/^\/(app|outline)\.(css|js)$/.test(url.pathname)) return serveUi(res, path.join(UI_DIR, url.pathname.slice(1)));
       throw new HttpError(404, "Not found");
     } catch (e) {
       const status = e instanceof HttpError ? e.status : e instanceof ConflictError ? 409 : e instanceof UserError ? 400 : 500;
@@ -187,6 +244,11 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
       if (status === 500) say(`error: ${message}`);
       json(res, status, { error: message });
     }
+  });
+
+  server.on("close", () => {
+    committer.flush();
+    if (outlineHooks.afterWrite) outlineHooks.afterWrite = null;
   });
 
   return new Promise((resolve, reject) => {
@@ -329,6 +391,17 @@ async function api(
   }
   if (route === "POST /api/loop/bump") return moveLoop(vault, str(body, "id"), str(body, "by"), optional(body, "else"), optional(body, "expect"));
   if (route === "PUT /api/loop/line") return editLoopLine(vault, str(body, "id"), str(body, "line"), str(body, "expect"));
+  if (route === "GET /api/outline") return outlineView(vault);
+  if (route === "POST /api/outline/op") return outlineOps(vault, body.ops);
+  if (route === "GET /api/outline/history") {
+    return outlineHistory(vault, { id: url.searchParams.get("id") ?? undefined, key: url.searchParams.get("key") ?? undefined });
+  }
+  if (route === "POST /api/outline/migrate") {
+    const r = migrateOutline(vault);
+    return { ...r, message: `outline.md: ${r.sections} sections, ${r.items} items (${r.closed} closed steps from the Logs)` };
+  }
+  if (route === "GET /api/outline/days") return { days: outlineDays(vault) };
+  if (route === "GET /api/outline/day") return outlineDay(vault, url.searchParams.get("day") ?? "");
   if (route === "GET /api/standup") return { text: standupText(vault, url.searchParams.get("week") === "1") };
   throw new HttpError(404, `No such API: ${route}`);
 }

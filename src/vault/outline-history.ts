@@ -147,7 +147,7 @@ export function allEvents(vault: string, now = new Date()): OutlineEvent[] {
   const out: OutlineEvent[] = [];
   let prev: Outline | null = null;
   for (const v of vs) {
-    out.push(...diffOutlines(prev, v.o, v));
+    out.push(...diffOutlines(prev, v.o, { date: v.date, sha: v.sha, subject: v.subject }));
     prev = v.o;
   }
   return out;

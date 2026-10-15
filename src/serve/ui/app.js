@@ -116,6 +116,7 @@
     route: { kind: "none" },
     ticket: null,   // TicketView of the selected ticket
     editor: null,   // active Editor instance
+    outline: null,  // the Outline page's editor (outline.js) while it is shown
   };
 
   function parseHash() {
@@ -125,6 +126,7 @@
       const item = m[2] ? m[2] : m[3] ? "file" : m[4] ? "linked" : "task";
       return { kind: "ticket", key: m[1], item, file: m[3] || m[4] || null };
     }
+    if (h === "/outline") return { kind: "outline" };
     if (h === "/loops") return { kind: "loops" };
     if (h === "/standup") return { kind: "standup" };
     if ((m = /^\/n\/(.+)$/.exec(h))) return { kind: "note", rel: m[1] };
@@ -286,6 +288,7 @@
     const r = state.route;
     const lc = o.loopCounts;
     let h = `<div class="brand">${ICON.logo}Local Flow<span class="sync" title="Last sync">${o.lastSync ? "Synced " + fmtTime(o.lastSync) : ""}</span></div>`;
+    h += `<button class="nl${r.kind === "outline" ? " on" : ""}" data-route="#/outline" title="One tree: tickets → steps → subtasks → waits, with lenses and history"><span class="ico">≡</span>Outline</button>`;
     h += `<button class="nl${r.kind === "loops" ? " on" : ""}" data-route="#/loops" title="Open loops: expired, due today, on me, waiting on people"><span class="ico">⟳</span>Loops` +
       `<span class="n">${lc.expired || lc.today ? "" : 0}</span>` +
       (lc.expired ? `<span class="ux" title="${lc.expired} expired">${lc.expired}</span>` : "") +
@@ -1561,6 +1564,10 @@
     if (state.editor) { state.editor.destroy(); state.editor = null; }
   }
 
+  function closeOutline() {
+    if (state.outline) { state.outline.destroy(); state.outline = null; }
+  }
+
   async function renderContent() {
     await renderContentPane();
     attachToc();
@@ -1569,6 +1576,15 @@
   async function renderContentPane() {
     closeEditor();
     const r = state.route;
+    if (r.kind === "outline") {
+      // The outline keeps its own state (caret, folds, undo) across live refreshes.
+      if (!state.outline) {
+        $("content").innerHTML = "";
+        state.outline = window.LFOutline.mount($("content"), { api, toast, go });
+      }
+      return;
+    }
+    closeOutline();
     if (r.kind === "ticket") {
       const t = state.ticket;
       if (r.item === "history") return renderHistory(t);
@@ -1606,6 +1622,10 @@
     const showFolder = state.route.kind === "ticket";
     $("folder").hidden = !showFolder;
     $("app").classList.toggle("nofolder", !showFolder);
+    // The outline is a page of its own: it takes the list's place too.
+    const wide = state.route.kind === "outline";
+    $("list").hidden = wide;
+    $("app").classList.toggle("nolist", wide);
     placeHandles();
     renderNav();
     renderList();
@@ -1633,7 +1653,7 @@
     }
   });
   window.addEventListener("hashchange", () => { onRoute().catch((err) => toast(err.message)); });
-  window.addEventListener("beforeunload", () => closeEditor());
+  window.addEventListener("beforeunload", () => { closeEditor(); closeOutline(); });
 
   // ---------- live updates ----------
   // The server long-polls /api/changes against a file watcher. On a change the panes are
@@ -1682,6 +1702,8 @@
       await redraw();
     } else if (r.kind === "loops" || r.kind === "standup") {
       await redraw();
+    } else if (r.kind === "outline" && state.outline) {
+      await state.outline.refresh();
     }
   }
 
@@ -1690,7 +1712,8 @@
     for (;;) {
       try {
         const { version } = await api("GET", `/api/changes?since=${since}`);
-        if (since && version > since) await refresh();
+        // A restarted server counts from 1 again: any other number means something changed.
+        if (since && version !== since) await refresh();
         since = version;
       } catch {
         await new Promise((r) => setTimeout(r, 3000));

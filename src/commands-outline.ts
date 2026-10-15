@@ -5,16 +5,14 @@
 import { LENSES, eventLine, renderHistory, renderOutline, sectionTitle, standupSince, visibleFor } from "./render/outline.ts";
 import type { Lens } from "./render/outline.ts";
 import { UserError } from "./util.ts";
-import { fmtDay, formatLoopItem, normalizeId } from "./vault/loopfields.ts";
-import { closedSteps } from "./vault/loops.ts";
-import { notesText, readLog } from "./vault/notes.ts";
-import { OUTLINE_FILE, findSection, insertItem, outlineText, parseOutline, withIds } from "./vault/outline.ts";
+import { fmtDay, normalizeId } from "./vault/loopfields.ts";
+import { OUTLINE_FILE, findSection } from "./vault/outline.ts";
 import { changesByDay, checkedSince, itemHistory, outlineAt, ticketHistory } from "./vault/outline-history.ts";
 import { applyOps } from "./vault/outline-ops.ts";
 import type { Op, PlaceIn } from "./vault/outline-ops.ts";
-import { apply, editModel, ensureSection, readModel } from "./vault/outline-store.ts";
-import type { Model } from "./vault/outline-store.ts";
-import { KEY_ONLY_RE, listTickets } from "./vault/store.ts";
+import { migrateOutline } from "./vault/outline-migrate.ts";
+import { readModel } from "./vault/outline-store.ts";
+import { KEY_ONLY_RE } from "./vault/store.ts";
 
 const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 const write = (text: string): void => void process.stdout.write(text.replace(CONTROL_RE, ""));
@@ -115,43 +113,15 @@ export function cmdOutlineDays(vault: string, opts: { since?: string; until?: st
   }
 }
 
-/**
- * Moves loops.md into the outline: every open loop becomes an item under its ticket's heading
- * (ids kept), and with the Log the closed steps of each ticket come first, checked off, with
- * their outcome as context. Idempotent: what is already in the outline is left alone.
- */
 export function cmdOutlineMigrate(vault: string, opts: { dryRun?: boolean; log?: boolean }): void {
-  const addLog = (m: Model): number => {
-    if (opts.log === false) return 0;
-    let n = 0;
-    for (const t of listTickets(vault)) {
-      const steps = closedSteps(readLog(notesText(t))).filter((c) => !m.o.byRef.has(c.id));
-      if (!steps.length) continue;
-      ensureSection(m, t.key);
-      steps.forEach((c, i) => {
-        const text = formatLoopItem({ id: c.id, created: "", key: t.key, text: c.text, owner: "me", due: "", onExpiry: "", tag: c.tag, after: c.after }, null);
-        apply(m, insertItem(m.o, { parent: null, section: t.key, index: i }, { id: c.id, check: "x", text, context: [`${c.outcome} (${c.date})`] }));
-        n++;
-      });
-    }
-    return n;
-  };
+  const r = migrateOutline(vault, opts);
   if (opts.dryRun) {
-    const m = readModel(vault);
-    const n = addLog(m);
-    const text = outlineText(withIds(m.o));
-    write(text || "(empty)\n");
+    write(r.text || "(empty)\n");
     out();
-    out(`dry run: ${parseOutline(text).items.length} items (${n} closed steps from the Logs); nothing written.`);
+    out(`dry run: ${r.items} items (${r.closed} closed steps from the Logs); nothing written.`);
     return;
   }
-  const n = editModel(vault, (m) => {
-    const added = addLog(m);
-    m.summary.push(`migrate loops.md${added ? ` and ${added} closed steps` : ""}`);
-    return { result: added };
-  }, () => "outline.md changed during the migration; run it again.");
-  const m = readModel(vault);
-  out(`${OUTLINE_FILE}: ${m.o.sections.length} sections, ${m.o.items.length} items (${n} closed steps from the Logs). loops.md now follows it.`);
+  out(`${OUTLINE_FILE}: ${r.sections} sections, ${r.items} items (${r.closed} closed steps from the Logs). loops.md now follows it.`);
 }
 
 // ---------- small edits for the agent ----------
