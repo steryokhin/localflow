@@ -178,7 +178,10 @@ shows **+** (a new item below) and **⠿** (drag it; click for its menu). Enter 
 Shift-Tab indent and outdent with children, ⌥↑ / ⌥↓ move a branch, ⌘↵ checks off, ⇧↵ edits the
 note under an item, ⌘. folds, ⌘] / ⌘[ focus in and out of a branch, Esc selects rows (⇧↑↓ to
 extend, then Tab, ⌥↑↓, ⌫, ⌘C; dragging the mouse across items selects them too, with a bar of
-actions over them), ⌘Z undoes. A− / A+ change the text size. Typing
+actions over them), ⌘Z undoes. A− / A+ change the text size. A date typed in an item's text, as in
+Todoist (`tomorrow 18:00`, `fri`, `24.03`, `in 3 days`, `завтра в 10:00`, `через неделю`), is
+highlighted while you type and becomes its deadline (`by`) when you leave the line (✕ on the hint
+keeps it as text); the calendar at the end of a line, or a click on its date, picks one. Typing
 `· from Jim · by tomorrow` turns an item into a loop with chips (late ones in red). Lenses on top
 — All, Active, Today, Waiting, Expired, Standup — and a filter keep the parents of what they show.
 Changes made by `lf` or an agent appear live and glow for a few seconds. *History* (⌥H) shows an

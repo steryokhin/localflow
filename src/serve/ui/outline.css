@@ -181,3 +181,38 @@
   .ol-hist { position: absolute; right: 0; top: 0; bottom: 0; width: min(340px, 90vw); z-index: 25; box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 }
 .ct > .ol-page { flex: 1; height: auto; }
+
+/* Dates: the calendar button, the hint for a date typed in the text, the picker. */
+.ol-cal { border: 0; background: none; padding: 0; width: calc(20px * var(--k)); height: calc(20px * var(--k)); align-self: center; color: var(--faint); border-radius: 5px; opacity: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.ol-cal svg { width: calc(15px * var(--k)); height: calc(15px * var(--k)); }
+.ol-row:hover > .ol-main .ol-cal, .ol-row.editing .ol-cal { opacity: 1; }
+.ol-cal:hover { color: var(--accent); background: var(--sunk); }
+.ol-chip.due[data-cal] { cursor: pointer; }
+::highlight(ol-when) { background-color: var(--accent-soft); color: var(--accent); }
+.ol-when { display: inline-flex; align-items: center; gap: 5px; align-self: center; height: calc(20px * var(--k)); padding: 0 4px 0 calc(7px * var(--k)); border-radius: 10px; font-size: calc(11.5px * var(--k)); font-weight: 500; color: var(--accent); background: var(--accent-soft); white-space: nowrap; }
+.ol-when svg { width: calc(12px * var(--k)); height: calc(12px * var(--k)); }
+.ol-when button { border: 0; background: none; color: inherit; padding: 0 3px; font-size: 11px; opacity: .7; cursor: pointer; }
+.ol-when button:hover { opacity: 1; }
+.ol-pick { position: absolute; z-index: 21; top: calc(30px * var(--k)); left: calc(var(--d, 0) * var(--ind) + 40px); width: 264px; background: var(--raise); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .14); padding: 10px; font-size: 13px; }
+.ol-pick-in { width: 100%; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--win); font-size: 13px; outline: none; }
+.ol-pick-in:focus { border-color: var(--accent); }
+.ol-pick-hint { margin: 5px 2px 8px; font-size: 12px; color: var(--muted); }
+.ol-pick-hint.bad { color: var(--faint); }
+.ol-pick-quick { display: flex; flex-direction: column; gap: 1px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.ol-pick-quick button { display: flex; justify-content: space-between; border: 0; background: none; padding: 5px 6px; border-radius: 6px; font-size: 13px; text-align: left; cursor: pointer; }
+.ol-pick-quick button span { color: var(--faint); font-size: 12px; }
+.ol-pick-quick button:hover, .ol-pick-grid button:hover, .ol-pick-mon button:hover, .ol-pick-time button:hover { background: var(--sunk); }
+.ol-pick-quick button.del { color: var(--del); }
+.ol-pick-mon { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.ol-pick-mon b { font-weight: 600; font-size: 13px; }
+.ol-pick-mon button { border: 0; background: none; width: 26px; height: 26px; border-radius: 6px; font-size: 16px; cursor: pointer; }
+.ol-pick-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.ol-pick-grid i { font-style: normal; font-size: 11px; color: var(--faint); padding: 2px 0; }
+.ol-pick-grid button { border: 0; background: none; height: 30px; border-radius: 6px; font-size: 12.5px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.ol-pick-grid button.past { color: var(--faint); }
+.ol-pick-grid button.today { color: var(--accent); font-weight: 700; }
+.ol-pick-grid button.on { background: var(--accent); color: var(--accent-ink); }
+.ol-pick-time { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.ol-pick-time input { margin-left: 6px; padding: 3px 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--win); font-size: 12.5px; }
+.ol-pick-time button { border: 0; background: none; padding: 3px 6px; border-radius: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }

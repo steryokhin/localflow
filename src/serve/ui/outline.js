@@ -16,6 +16,7 @@
   const SIZE_KEY = "lf.outline.size";
   // The fold arrow, drawn so that it is as big as the text in any font.
   const CHEVRON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const CAL = `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
   const SIZES = [12, 13, 14, 15, 16, 17, 18, 20, 22, 24];
   const DEFAULT_SIZE = 15;
   // "· done 2026-10-15 14:30" at the end of a checked-off item: shown as a chip, not as text.
@@ -29,14 +30,36 @@
     ["standup", "Standup", "Done since the last working day, mine due today, waiting on others"],
   ];
   const SAVE_DELAY = 500;
+  // An edit begun while a save of ours touching the same item is still on its way: the hash it is
+  // checked against is the one that save brings back, filled in when the edit is sent.
+  const PENDING = "\0pending";
   const LETTERS = "abcdefghijkmnpqrstuvwxyz";
   const DIGITS = "23456789";
+  const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const read = (key, fallback) => { try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } };
   const write = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode */ } };
   const pad = (n) => String(n).padStart(2, "0");
+  // A copy of ops sent again (undo, redo): the hashes they were checked against are from before.
+  const fresh = (ops) => JSON.parse(JSON.stringify(ops)).map((op) => { delete op.expect; return op; });
+  const When = () => window.LFWhen;
+
+  /** An item's line with its "by" field set to `due` (null: taken out). */
+  function withBy(text, due) {
+    const parts = text.split(" · ");
+    const i = parts.findIndex((p, k) => k > 0 && /^(?:by|до)\s/i.test(p));
+    if (due === null) { if (i > 0) parts.splice(i, 1); return parts.join(" · "); }
+    if (i > 0) parts[i] = `by ${due}`; else parts.splice(1, 0, `by ${due}`);
+    return parts.join(" · ");
+  }
+
+  /** The "by" field of a line as written, or null. */
+  function byOf(text) {
+    const p = text.split(" · ").slice(1).find((x) => /^(?:by|до)\s/i.test(x));
+    return p ? p.replace(/^\S+\s+/, "").trim() : null;
+  }
 
   function newId(taken) {
     for (;;) {
@@ -153,6 +176,7 @@
       this.saveTimer = 0;
       this.queue = [];           // operation batches waiting to be sent
       this.inflight = false;
+      this.inflightOps = null;
       this.undoStack = [];
       this.redoStack = [];
       this.sel = null;           // { anchor, head } ids of a row selection
@@ -162,6 +186,9 @@
       this.snapshot = null;      // { day, items, events } when viewing a past day (read-only)
       this.menu = null;          // id of the row whose menu is open
       this.addingTicket = false;
+      this.picker = null;        // { id, month: Date } of the open date picker
+      this.whenSkip = new Map(); // id -> phrases the user said are not dates
+      this.whenTyped = new Set(); // ids typed into since they were focused: their date phrase is taken on leaving
       this.drag = null;
       this.destroyed = false;
       this.status = "";
@@ -194,7 +221,7 @@
       const a = document.activeElement;
       const typingHere = a && this.root.contains(a) && (a.classList.contains("ol-htitle") || a.classList.contains("ol-ctxedit") || a.closest(".ol-secform"));
       return this.destroyed || this.inflight || this.queue.length || this.drafts.size || this.drag ||
-        (this.ctxEdit !== null && this.ctxEdit !== undefined) || this.addingTicket || this.menu || typingHere;
+        (this.ctxEdit !== null && this.ctxEdit !== undefined) || this.addingTicket || this.menu || this.picker || typingHere;
     }
 
     async refresh() {
@@ -332,16 +359,18 @@
       const ops = this.queue.shift();
       // Fill in what the server checks against: each item's own-content hash as last seen.
       for (const op of ops) {
-        if (op.op === "context" && op.expect === undefined) {
+        if ((op.op === "context" && op.expect === undefined) || op.expect === PENDING) {
           const own = this.serverOwn(op.id);
-          if (own) op.expect = own;
+          if (own) op.expect = own; else delete op.expect;
         }
       }
       this.inflight = true;
+      this.inflightOps = ops;
       this.say("Saving…");
       try {
         const r = await this.api("POST", "/api/outline/op", { ops });
         this.inflight = false;
+        this.inflightOps = null;
         if (this.destroyed) return;
         const remap = Object.entries(r.ids || {}).filter(([a, b]) => a !== b);
         if (remap.length) this.remapIds(Object.fromEntries(remap));
@@ -357,9 +386,15 @@
         if (!this.queue.length && this.pendingRefresh) setTimeout(() => this.refresh(), 0);
       } catch (err) {
         this.inflight = false;
+        this.inflightOps = null;
+        // Text typed here that did not reach the file: shown in the message, so it is not lost.
+        const lost = [...ops, ...this.queue.flat()].filter((op) => op.op === "text").map((op) => op.text);
+        for (const [id, text] of this.drafts) if (this.typedFrom.get(id) !== text) lost.push(text);
         this.queue = [];
         this.say("Not saved", "err");
-        this.toast(err.status === 409 ? err.message : `Not saved: ${err.message}. Showing the outline as it is on disk.`);
+        const why = err.status === 409 ? err.message : `Not saved: ${err.message}. Showing the outline as it is on disk.`;
+        const kept = [...new Set(lost)].filter((t) => t.trim());
+        this.toast(kept.length ? `${why} Your text: «${kept.join("», «")}»` : why, false, kept.length ? 20000 : undefined);
         // Whatever went wrong, the page shows the file again: nothing on screen that is not saved.
         this.drafts.clear();
         this.typedFrom.clear();
@@ -369,6 +404,13 @@
         await this.load();
       }
       this.pump();
+    }
+
+    /** The hash an edit of `id` begun now is checked against (PENDING while a save of it is on its way). */
+    baseOwn(id) {
+      const touches = (ops) => ops.some((op) => op.id === id);
+      if ((this.inflightOps && touches(this.inflightOps)) || this.queue.some(touches)) return PENDING;
+      return this.serverOwn(id);
     }
 
     serverOwn(id) {
@@ -401,7 +443,7 @@
       this.redoStack.push(u);
       this.localApply(u.inverse);
       this.render();
-      this.send(JSON.parse(JSON.stringify(u.inverse)));
+      this.send(fresh(u.inverse));
     }
 
     redo() {
@@ -410,7 +452,7 @@
       this.undoStack.push(u);
       this.localApply(u.ops);
       this.render();
-      this.send(JSON.parse(JSON.stringify(u.ops)));
+      this.send(fresh(u.ops));
     }
 
     // ---------- typing ----------
@@ -422,10 +464,12 @@
       if (!this.typedFrom.has(id)) {
         this.typedFrom.set(id, e.node.text);
         // What the server had when typing began: a change made elsewhere since then is a conflict.
-        this.typedOwn.set(id, this.serverOwn(id));
+        this.typedOwn.set(id, this.baseOwn(id));
       }
       this.drafts.set(id, el.textContent);
       e.node.text = el.textContent;
+      this.whenTyped.add(id);
+      this.paintWhen(id, el);
       clearTimeout(this.saveTimer);
       this.saveTimer = setTimeout(() => this.flushDrafts(), SAVE_DELAY);
       this.say("Editing…");
@@ -584,6 +628,199 @@
       this.act(ops, inverse, this.focus);
     }
 
+    // ---------- dates ----------
+
+    /** The date phrase in an item's text (its own words, before the fields), unless the user said it is none. */
+    whenIn(id, text) {
+      const W = When();
+      if (!W) return null;
+      const main = text.split(" · ")[0];
+      const f = W.find(main, new Date(), { skip: this.whenSkip.get(id) || [] });
+      // A line that is nothing but a date stays as it is.
+      return f && W.cut(main, f) ? f : null;
+    }
+
+    /** While typing: the phrase is highlighted, and a hint next to it shows the date it stands for. */
+    paintWhen(id, el) {
+      const n = this.idx.get(id)?.node;
+      const row = el.closest(".ol-row");
+      let hint = row.querySelector(".ol-when");
+      const f = n && !n.ticket && n.check !== "x" ? this.whenIn(id, el.textContent) : null;
+      if (!f) { if (hint) hint.remove(); this.highlight(null); return; }
+      if (!hint) { hint = document.createElement("span"); hint.className = "ol-when"; el.after(hint); }
+      hint.title = `“${f.phrase}” becomes the deadline when you leave the line or press ↵ at its end`;
+      hint.innerHTML = `${CAL}<span>${esc(When().label(f.due))}</span><button data-whenno tabindex="-1" title="Not a date: keep “${esc(f.phrase)}” as text">✕</button>`;
+      this.highlight(el, f);
+    }
+
+    highlight(el, f) {
+      if (!window.CSS || !CSS.highlights || typeof Highlight === "undefined") return;
+      const node = el && el.firstChild;
+      if (!f || !node || node.nodeType !== 3 || node.length < f.end) { CSS.highlights.delete("ol-when"); return; }
+      const r = document.createRange();
+      r.setStart(node, f.start);
+      r.setEnd(node, f.end);
+      CSS.highlights.set("ol-when", new Highlight(r));
+    }
+
+    clearWhen(id) {
+      const el = this.textEl(id);
+      const hint = el && el.closest(".ol-row").querySelector(".ol-when");
+      if (hint) hint.remove();
+      this.highlight(null);
+    }
+
+    /** ✕ on the hint: the phrase stays text in this item. */
+    skipWhen(id) {
+      const el = this.textEl(id);
+      if (!el) return;
+      const f = this.whenIn(id, el.textContent);
+      if (f) this.whenSkip.set(id, [...(this.whenSkip.get(id) || []), f.phrase]);
+      this.paintWhen(id, el);
+    }
+
+    /** On leaving a line typed into (or ↵ at its end): its date phrase becomes its "by". */
+    takeWhen(id) {
+      if (!this.whenTyped.delete(id)) return false;
+      const e = this.idx.get(id);
+      if (!e || e.node.ticket || e.node.check === "x") return false;
+      const text = this.rawText(id);
+      const f = this.whenIn(id, text);
+      if (!f) return false;
+      const main = text.split(" · ")[0];
+      this.setDue(id, f.due, When().cut(main, f) + text.slice(main.length));
+      return true;
+    }
+
+    /** Sets the item's deadline (null: none); a bullet with a date becomes a task. `base`: the line to set it on. */
+    setDue(id, due, base) {
+      const e = this.idx.get(id);
+      if (!e) return;
+      this.flushDrafts();
+      const n = e.node;
+      const was = n.text;
+      const text = withBy(base ?? was, due);
+      const ops = [];
+      const inverse = [];
+      const toTask = due && n.check === null;
+      if (toTask) ops.push({ op: "check", id, check: " " });
+      if (text !== was) {
+        // After a check in the same batch the item's hash is not the one seen here.
+        const own = toTask ? null : this.baseOwn(id);
+        ops.push(own ? { op: "text", id, text, expect: own } : { op: "text", id, text });
+        inverse.push({ op: "text", id, text: was });
+      }
+      if (toTask) inverse.push({ op: "check", id, check: null });
+      if (!ops.length) return this.render();
+      const active = document.activeElement === this.textEl(id);
+      this.act(ops, inverse, active ? { id, offset: text.length } : null);
+    }
+
+    openPicker(id) {
+      const n = this.idx.get(id).node;
+      if (n.ticket) return;
+      this.flushDrafts();
+      const cur = byOf(n.text);
+      const m = cur && /^\d{4}-\d{2}-\d{2}/.test(cur) ? new Date(Number(cur.slice(0, 4)), Number(cur.slice(5, 7)) - 1, 1) : new Date();
+      this.picker = { id, month: new Date(m.getFullYear(), m.getMonth(), 1) };
+      this.render();
+      const inp = this.body.querySelector(".ol-pick-in");
+      if (inp) inp.focus();
+    }
+
+    closePicker() {
+      if (!this.picker) return;
+      const id = this.picker.id;
+      this.picker = null;
+      this.render();
+      if (this.pendingRefresh) setTimeout(() => this.refresh(), 0);
+      return id;
+    }
+
+    pickerHtml(n) {
+      const W = When();
+      const now = new Date();
+      const cur = byOf(n.text);
+      const curDay = cur && /^\d{4}-\d{2}-\d{2}/.test(cur) ? cur.slice(0, 10) : null;
+      const curTime = cur && /^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$/.test(cur) ? cur.slice(11).padStart(5, "0") : "";
+      const m = this.picker.month;
+      const quick = [["today", "Today"], ["tomorrow", "Tomorrow"], ["next week", "Next week"], ["saturday", "Weekend"]];
+      let h = `<input class="ol-pick-in" placeholder="tomorrow 18:00, fri, 24.03, через 3 дня" spellcheck="false" autocomplete="off">` +
+        `<div class="ol-pick-hint">${cur ? `Due ${esc(W.label(cur, now))}` : "No date yet"}</div><div class="ol-pick-quick">` +
+        quick.map(([q, label]) => `<button data-pq="${q}">${label}<span>${esc(W.label(W.parse(q, now), now, { plain: true }))}</span></button>`).join("") +
+        (cur ? `<button data-pq="" class="del">No date</button>` : "") + `</div>`;
+      h += `<div class="ol-pick-mon"><button data-pm="-1" aria-label="Previous month">‹</button><b>${MONTHS_FULL[m.getMonth()]} ${m.getFullYear()}</b><button data-pm="1" aria-label="Next month">›</button></div>`;
+      h += `<div class="ol-pick-grid">${["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d) => `<i>${d}</i>`).join("")}${"<span></span>".repeat((m.getDay() + 6) % 7)}`;
+      const today = W.fmtDay(now);
+      const days = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+      for (let d = 1; d <= days; d++) {
+        const ds = W.fmtDay(new Date(m.getFullYear(), m.getMonth(), d));
+        const cls = [ds === today ? "today" : "", ds === curDay ? "on" : "", ds < today ? "past" : ""].filter(Boolean).join(" ");
+        h += `<button data-pd="${ds}"${cls ? ` class="${cls}"` : ""}>${d}</button>`;
+      }
+      h += `</div><div class="ol-pick-time"><label>Time <input type="time" class="ol-pick-t" value="${curTime}"></label>` +
+        (curTime ? `<button data-pt>No time</button>` : "") + `</div>`;
+      return h;
+    }
+
+    /** Events inside the picker stay there (the rows' own handlers never see them). */
+    wirePicker() {
+      const box = this.body.querySelector(".ol-pick");
+      if (!box || !this.picker) return;
+      const id = this.picker.id;
+      for (const ev of ["mousedown", "paste", "copy", "cut", "dblclick", "focusin", "focusout", "dragstart"]) box.addEventListener(ev, (e) => e.stopPropagation());
+      const node = () => this.idx.get(id)?.node;
+      const time = () => box.querySelector(".ol-pick-t").value;
+      const pick = (due) => { this.picker = null; if (node()) this.setDue(id, due); else this.render(); };
+      const withTime = (due) => (due && due.length === 10 && time() ? `${due} ${time()}` : due);
+      box.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const t = e.target;
+        const q = t.closest("[data-pq]");
+        if (q) return pick(q.dataset.pq ? withTime(When().parse(q.dataset.pq)) : null);
+        const d = t.closest("[data-pd]");
+        if (d) return pick(withTime(d.dataset.pd));
+        const mv = t.closest("[data-pm]");
+        if (mv) {
+          const m = this.picker.month;
+          this.picker.month = new Date(m.getFullYear(), m.getMonth() + Number(mv.dataset.pm), 1);
+          const keep = box.querySelector(".ol-pick-in").value;
+          box.innerHTML = this.pickerHtml(node());
+          const inp = box.querySelector(".ol-pick-in");
+          inp.value = keep;
+          return;
+        }
+        if (t.closest("[data-pt]")) {
+          const cur = byOf(node().text);
+          return pick(cur ? cur.slice(0, 10) : null);
+        }
+      });
+      box.addEventListener("input", (e) => {
+        e.stopPropagation();
+        if (!e.target.classList.contains("ol-pick-in")) return;
+        const v = e.target.value.trim();
+        const due = When().parse(v);
+        const hint = box.querySelector(".ol-pick-hint");
+        hint.classList.toggle("bad", !!v && !due);
+        hint.textContent = !v ? (byOf(node().text) ? `Due ${When().label(byOf(node().text))}` : "No date yet") : due ? `↵ ${When().label(due)}` : "Not a date yet";
+      });
+      box.addEventListener("change", (e) => {
+        // A new time for the date the item already has.
+        if (!e.target.classList.contains("ol-pick-t")) return;
+        const cur = byOf(node().text);
+        if (cur && /^\d{4}-\d{2}-\d{2}/.test(cur)) pick(e.target.value ? `${cur.slice(0, 10)} ${e.target.value}` : cur.slice(0, 10));
+      });
+      box.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") { e.preventDefault(); const back = this.closePicker(); if (back) this.focusRow(back, "end"); return; }
+        if (e.key === "Enter" && e.target.classList.contains("ol-pick-in")) {
+          e.preventDefault();
+          const due = When().parse(e.target.value);
+          if (due) pick(due);
+        }
+      });
+    }
+
     setKind(id, check) {
       const n = this.idx.get(id).node;
       if (n.check === check) return;
@@ -713,7 +950,10 @@
       body.addEventListener("drop", (e) => this.onDrop(e));
       body.addEventListener("dragend", () => this.endDrag());
       // Pressing in one item and moving the mouse into another selects whole items (as in Bike / Workflowy).
-      body.addEventListener("mousedown", (e) => this.onPress(e));
+      body.addEventListener("mousedown", (e) => {
+        if (e.target.closest(".ol-when")) e.preventDefault(); // the hint's ✕ keeps the caret in the line
+        this.onPress(e);
+      });
       this.onDocMove = (e) => this.onPressMove(e);
       this.onDocUp = () => this.onPressEnd();
       document.addEventListener("mousemove", this.onDocMove);
@@ -792,6 +1032,7 @@
         h += `<div class="ol-none">Nothing here${this.query ? ` matching “${esc(this.query)}”` : ` in ${esc(this.lens)}`}.</div>`;
       }
       this.body.innerHTML = h;
+      this.wirePicker();
       this.renderFoot();
       this.paintSelection();
       if (keepFocus && !this.sel) {
@@ -924,7 +1165,7 @@
         if (l.owner !== "me") chips += `<span class="ol-chip who" title="Waiting on ${esc(l.owner)}">${esc(l.owner)}</span>`;
         if (l.due) {
           const late = state === "late" ? ` · ${span(now.getTime() - l.dueAt)} late` : "";
-          chips += `<span class="ol-chip due ${state}" title="Deadline ${esc(l.due)}">${n.check === "x" ? "was due " : ""}${esc(fmtDue(l.due, l.dueAt, now))}${late}</span>`;
+          chips += `<span class="ol-chip due ${state}" data-cal title="Deadline ${esc(l.due)}: click to change">${n.check === "x" ? "was due " : ""}${esc(fmtDue(l.due, l.dueAt, now))}${late}</span>`;
         }
         if (l.onExpiry && n.check === " ") chips += `<span class="ol-chip else" title="If it passes">else: ${esc(l.onExpiry)}</span>`;
       }
@@ -942,8 +1183,10 @@
         `<span class="ol-grip" draggable="true" title="Drag to move it · click for the menu · ⇧-click to select">⠿</span></span>` +
         `<button class="ol-fold${hasKids ? "" : " none"}${folded ? " folded" : ""}" data-fold tabindex="-1" aria-label="Fold">${CHEVRON}</button>${box}` +
         `<div class="ol-main"><div class="ol-line"><div class="ol-text" contenteditable="plaintext-only" spellcheck="false" data-ph="${t ? "Ticket title" : n.check === null ? "Note" : "To do"}">${esc(text)}</div>` +
-        (chips ? `<span class="ol-chips">${chips}</span>` : "") + `</div>${ctx}${editing}</div>` +
-        (this.menu === n.id ? this.menuHtml(n) : "") + `</div>`;
+        (chips ? `<span class="ol-chips">${chips}</span>` : "") +
+        (!t && n.check !== "x" && !(l && l.due) ? `<button class="ol-cal" data-cal tabindex="-1" title="Set a date (or type one: tomorrow 18:00, fri, 24.03)">${CAL}</button>` : "") +
+        `</div>${ctx}${editing}</div>` +
+        (this.menu === n.id ? this.menuHtml(n) : "") + (this.picker && this.picker.id === n.id ? `<div class="ol-pick">${this.pickerHtml(n)}</div>` : "") + `</div>`;
     }
 
     menuHtml(n) {
@@ -999,11 +1242,14 @@
         row.classList.remove("editing");
         const id = this.rowOf(t);
         this.flushDrafts();
+        this.clearWhen(id);
         setTimeout(() => {
           if (this.destroyed) return;
           const a = document.activeElement;
-          if (!a || !a.classList || !a.classList.contains("ol-text")) {
-            this.focus = null;
+          const left = !a || !a.classList || !a.classList.contains("ol-text");
+          if (left) this.focus = null;
+          if (a !== this.textEl(id)) this.takeWhen(id);
+          if (left) {
             // Show the short form of a loop again.
             const e2 = this.idx.get(id);
             const el = this.textEl(id);
@@ -1020,12 +1266,14 @@
       if (t.closest("[data-migrate]")) return this.migrate();
       const row = t.closest(".ol-row");
       if (!row) {
-        if (this.menu) { this.menu = null; this.render(); }
+        if (this.menu || this.picker) { this.menu = null; this.picker = null; this.render(); }
         return;
       }
       const id = row.dataset.id;
       if (t.closest(".ol-menu")) return this.onMenu(t, id);
-      if (this.menu) { this.menu = null; this.render(); }
+      if (t.closest("[data-cal]")) { this.menu = null; return this.openPicker(id); }
+      if (t.closest("[data-whenno]")) return this.skipWhen(id);
+      if (this.menu || this.picker) { this.menu = null; this.picker = null; this.render(); }
       if (this.sel && !e.shiftKey && row.classList.contains("sel") && !t.closest("button, .ol-grip, .ol-chips")) {
         this.sel = null;
         this.paintSelection();
@@ -1117,7 +1365,7 @@
 
     editContext(id) {
       this.ctxEdit = id;
-      this.ctxOwn = this.serverOwn(id);
+      this.ctxOwn = this.baseOwn(id);
       this.ctxOpen.delete(id);
       this.render();
       const ta = this.body.querySelector(".ol-ctxedit");
@@ -1193,6 +1441,8 @@
       if (e.key === "Enter") {
         e.preventDefault();
         this.flushDrafts();
+        // A date typed at the end goes into the line's "by" before the new item is made.
+        if (range.start === text.length) this.takeWhen(id);
         const kind = this.kindOf(node);
         if (!text.trim() && this.depthOf(id) > 0 && !node.children.length) return this.outdent([id]);
         if (range.start === 0 && range.end === 0 && text.length) {
@@ -1456,7 +1706,7 @@
       if (e.button !== 0 || this.snapshot) return;
       const row = e.target.closest(".ol-row");
       if (!row || row.classList.contains("ol-title")) return;
-      if (e.target.closest(".ol-grip, button, .ol-chips, .ol-menu, textarea, a, .ol-ctxt")) return;
+      if (e.target.closest(".ol-grip, button, .ol-chips, .ol-menu, .ol-pick, .ol-when, textarea, a, .ol-ctxt")) return;
       const id = row.dataset.id;
       // Shift-click: whole items from the one being edited (or the selection's start) to this one.
       if (e.shiftKey) {
@@ -1797,6 +2047,8 @@
           ["Shift + Enter", "a note under the item (context, links, quotes)"],
           ["⌘ + Enter", "check / uncheck"],
           ["[ ] then space", "at the start of a bullet: makes it a task; “- ” then space makes a task a bullet"],
+          ["tomorrow 18:00", "a date typed in the text (today, fri, 24.03, in 3 days, завтра в 10:00, через неделю) is highlighted; leaving the line or ↵ at its end makes it the item’s deadline. ✕ on the hint keeps it as text"],
+          ["Calendar", "the calendar at the end of a line (or a click on its date) picks a date and time, or takes it off"],
           ["· by tomorrow", "“wait for review · from Jim · by tomorrow” turns the item into a loop"],
         ]],
         ["Moving items", [

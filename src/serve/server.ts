@@ -240,7 +240,7 @@ export function startServer(vault: string, opts: ServeOptions = {}): Promise<htt
       if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "Method not allowed");
       if (url.pathname.startsWith("/raw/")) return serveRaw(res, rawFilePath(vault, decodeURIComponent(url.pathname.slice(5))));
       if (url.pathname === "/") return serveUi(res, path.join(UI_DIR, "app.html"));
-      if (/^\/(app|outline)\.(css|js)$/.test(url.pathname)) return serveUi(res, path.join(UI_DIR, url.pathname.slice(1)));
+      if (/^\/(app|outline)\.(css|js)$|^\/when\.js$/.test(url.pathname)) return serveUi(res, path.join(UI_DIR, url.pathname.slice(1)));
       throw new HttpError(404, "Not found");
     } catch (e) {
       const status = e instanceof HttpError ? e.status : e instanceof ConflictError ? 409 : e instanceof UserError ? 400 : 500;
