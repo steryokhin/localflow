@@ -3,7 +3,8 @@
 // GET /api/outline. Every change is applied to the model at once (so typing and moving feel
 // instant) and sent as an operation by id to POST /api/outline/op; the server's answer replaces
 // the model. Keys follow Bike / Workflowy: Enter new item, Tab / Shift-Tab indent with children,
-// ⌥↑ / ⌥↓ move a branch, ⌘. fold, ⌘] / ⌘[ focus in / out, Esc selects rows.
+// ⌥↑ / ⌥↓ move a branch, ⌘. fold, ⌘] / ⌘[ focus in / out; Esc or a mouse drag across items selects
+// whole rows, and the bar over them (or the same keys) moves, folds or groups them.
 
 (function () {
   "use strict";
@@ -12,6 +13,13 @@
   const FOLDED_KEY = "lf.outline.folded";
   const CTX_OPEN_KEY = "lf.outline.ctx";
   const HOIST_KEY = "lf.outline.hoist";
+  const SIZE_KEY = "lf.outline.size";
+  // The fold arrow, drawn so that it is as big as the text in any font.
+  const CHEVRON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const SIZES = [12, 13, 14, 15, 16, 17, 18, 20, 22, 24];
+  const DEFAULT_SIZE = 15;
+  // "· done 2026-10-15 14:30" at the end of a checked-off item: shown as a chip, not as text.
+  const DONE_RE = /(^| · )(?:done|сделано) (\d{4}-\d{2}-\d{2})(?: \d{1,2}:\d{2})?(?= · |$)/i;
   const LENSES = [
     ["all", "All", "Everything"],
     ["active", "Active", "Open work: what is not done, with its parents"],
@@ -54,6 +62,18 @@
     if (m < 60) return `${m}m`;
     if (m < 48 * 60) return `${Math.round(m / 60)}h`;
     return `${Math.round(m / 1440)}d`;
+  }
+
+  /** "2026-10-15 14:30" -> "today 14:30", "yesterday", "12 Oct", "12 Oct 2025". */
+  function fmtDay(stamp, now) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{1,2}):(\d{2}))?$/.exec(stamp);
+    if (!m) return stamp;
+    const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - at) / 86400000);
+    const time = m[4] !== undefined ? ` ${pad(Number(m[4]))}:${m[5]}` : "";
+    if (days === 0) return `today${time}`;
+    if (days === 1) return "yesterday";
+    return `${at.getDate()} ${MONTHS[at.getMonth()]}${at.getFullYear() !== now.getFullYear() ? ` ${at.getFullYear()}` : ""}`;
   }
 
   const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
@@ -124,6 +144,7 @@
       this.folded = new Set(read(FOLDED_KEY, []));
       this.ctxOpen = new Set(read(CTX_OPEN_KEY, []));
       this.hoist = read(HOIST_KEY, null); // item id or section ref ("s:REF")
+      this.size = SIZES.includes(read(SIZE_KEY, DEFAULT_SIZE)) ? read(SIZE_KEY, DEFAULT_SIZE) : DEFAULT_SIZE;
       this.focus = null;         // { id, offset }
       this.drafts = new Map();   // id -> text typed and not saved yet
       this.typedFrom = new Map(); // id -> text when this typing session began (for undo)
@@ -151,6 +172,8 @@
       this.destroyed = true;
       this.flushDrafts();
       document.removeEventListener("keydown", this.onDocKey, true);
+      document.removeEventListener("mousemove", this.onDocMove);
+      document.removeEventListener("mouseup", this.onDocUp);
     }
 
     // ---------- loading ----------
@@ -274,7 +297,7 @@
     }
 
     treeNode(t) {
-      return { id: t.id, written: true, check: t.check, text: t.text, context: t.context || [], own: "", loop: null, children: (t.children || []).map((c) => this.treeNode(c)) };
+      return { id: t.id, written: true, check: t.check, text: t.text, context: t.context || [], own: "", done: null, loop: null, children: (t.children || []).map((c) => this.treeNode(c)) };
     }
 
     resolvePlace(p) {
@@ -679,11 +702,12 @@
         `<div class="ol-bar"><div class="ol-lenses" role="tablist"></div>` +
         `<input class="ol-q" type="search" placeholder="Filter…" spellcheck="false" autocomplete="off" aria-label="Filter the outline">` +
         `<span class="ol-status" aria-live="polite"></span>` +
+        `<span class="ol-size" title="Text size"><button data-fs="-1" aria-label="Smaller text">A−</button><button data-fs="0" title="Back to ${DEFAULT_SIZE}px"></button><button data-fs="1" aria-label="Larger text">A+</button></span>` +
         `<button class="btn ghost ol-histbtn" title="History: the outline day by day (⌥H)">History</button>` +
-        `<button class="btn ghost ol-help" title="Keyboard">⌘</button></div>` +
+        `<button class="btn ghost ol-help" title="How to use the outline: keys and mouse">? Help</button></div>` +
         `<div class="ol-wrap"><div class="ol-scroll"><div class="ol-crumbs"></div><div class="ol-body" tabindex="-1"></div>` +
         `<div class="ol-foot"></div></div><aside class="ol-hist" hidden></aside></div>` +
-        `<div class="ol-drop" hidden></div><div class="ol-keys" hidden></div></div>`;
+        `<div class="ol-drop" hidden></div><div class="ol-seltools" hidden></div><div class="ol-keys" hidden></div></div>`;
       const body = this.root.querySelector(".ol-body");
       this.body = body;
       this.root.querySelector(".ol-q").addEventListener("input", (e) => { this.query = e.target.value; this.sticky.clear(); this.render(); });
@@ -692,7 +716,10 @@
         if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); const first = this.body.querySelector(".ol-row .ol-text"); if (first) setCaret(first, 0); }
       });
       this.root.querySelector(".ol-histbtn").addEventListener("click", () => this.toggleHistory());
+      this.root.querySelector(".ol-scroll").addEventListener("scroll", () => { if (this.sel) this.paintTools(); }, { passive: true });
       this.root.querySelector(".ol-help").addEventListener("click", () => this.toggleKeys());
+      this.root.querySelectorAll("[data-fs]").forEach((b) => b.addEventListener("click", () => this.setSize(Number(b.dataset.fs))));
+      this.applySize();
 
       body.addEventListener("input", (e) => { if (e.target.classList.contains("ol-text")) this.onInput(e.target); });
       body.addEventListener("keydown", (e) => this.onKey(e));
@@ -703,13 +730,24 @@
       body.addEventListener("paste", (e) => this.onPaste(e));
       body.addEventListener("copy", (e) => this.onCopy(e));
       body.addEventListener("cut", (e) => { if (this.sel) { this.onCopy(e); this.remove(this.selectedIds()); } });
-      body.addEventListener("contextmenu", (e) => { const row = e.target.closest(".ol-row"); if (row && e.target.closest(".ol-grip")) { e.preventDefault(); this.openMenu(row.dataset.id); } });
+      body.addEventListener("contextmenu", (e) => { const row = e.target.closest(".ol-row"); if (row && e.target.closest(".ol-grip")) { e.preventDefault(); if (this.menu !== row.dataset.id) this.openMenu(row.dataset.id); } });
       body.addEventListener("dragstart", (e) => this.onDragStart(e));
       body.addEventListener("dragover", (e) => this.onDragOver(e));
       body.addEventListener("drop", (e) => this.onDrop(e));
       body.addEventListener("dragend", () => this.endDrag());
+      // Pressing in one item and moving the mouse into another selects whole items (as in Bike / Workflowy).
+      body.addEventListener("mousedown", (e) => this.onPress(e));
+      this.onDocMove = (e) => this.onPressMove(e);
+      this.onDocUp = () => this.onPressEnd();
+      document.addEventListener("mousemove", this.onDocMove);
+      document.addEventListener("mouseup", this.onDocUp);
+      const tools = this.root.querySelector(".ol-seltools");
+      tools.addEventListener("mousedown", (e) => e.preventDefault()); // keep the selection
+      tools.addEventListener("click", (e) => { const b = e.target.closest("[data-st]"); if (b) this.selTool(b.dataset.st); });
       this.onDocKey = (e) => {
         if (this.destroyed) return;
+        const keys = this.root.querySelector(".ol-keys");
+        if (e.key === "Escape" && !keys.hidden) { e.preventDefault(); e.stopPropagation(); keys.hidden = true; return; }
         const mod = e.metaKey || e.ctrlKey;
         if (this.body.contains(e.target)) {
           if (e.altKey && e.code === "KeyH") { e.preventDefault(); this.toggleHistory(); }
@@ -733,6 +771,19 @@
       el.className = "ol-status" + (kind ? " " + kind : "");
       clearTimeout(this.sayTimer);
       if (text === "Saved" || kind === "ext") this.sayTimer = setTimeout(() => { el.textContent = ""; }, 2500);
+    }
+
+    /** One step smaller (-1) or larger (1), or back to the default (0). */
+    setSize(step) {
+      const i = SIZES.indexOf(this.size);
+      this.size = step === 0 ? DEFAULT_SIZE : SIZES[Math.max(0, Math.min(SIZES.length - 1, i + step))];
+      write(SIZE_KEY, this.size);
+      this.applySize();
+    }
+
+    applySize() {
+      this.root.querySelector(".ol-page").style.setProperty("--k", String(this.size / DEFAULT_SIZE));
+      this.root.querySelector('[data-fs="0"]').textContent = `${this.size}px`;
     }
 
     /** Redraws everything; the caret goes to `focusTo` or stays where it was. */
@@ -767,7 +818,7 @@
       }
       this.body.innerHTML = h;
       this.renderFoot();
-      if (this.sel) this.paintSelection();
+      this.paintSelection();
       if (keepFocus && !this.sel) {
         const el = this.body.querySelector(`.ol-row[data-id="${CSS.escape(keepFocus.id)}"] .ol-text`);
         if (el) {
@@ -843,7 +894,7 @@
 
     display(node) {
       const l = node.loop;
-      if (!l) return { text: node.text, loop: null };
+      if (!l) return { text: node.text.replace(DONE_RE, ""), loop: null };
       const tagged = l.tag && node.text.startsWith(`#${l.tag} `);
       return { text: (tagged ? `#${l.tag} ` : "") + l.text, loop: l };
     }
@@ -854,7 +905,7 @@
       const st = t ? `<span class="ol-st ${esc(t.status)}">${esc(t.status)}</span>` : "";
       const key = sec.key ? `<a class="ol-key" href="#/t/${esc(sec.key)}" title="Open ${esc(sec.key)}">${esc(sec.key)}</a>` : "";
       return `<div class="ol-head${sec.closed ? " closed" : ""}" data-sec="${esc(sec.ref)}">` +
-        `<button class="ol-fold${folded ? " folded" : ""}" data-foldsec="${esc(sec.ref)}" aria-label="Fold">▾</button>${key}` +
+        `<button class="ol-fold${folded ? " folded" : ""}" data-foldsec="${esc(sec.ref)}" aria-label="Fold">${CHEVRON}</button>${key}` +
         `<span class="ol-htitle" contenteditable="plaintext-only" spellcheck="false" data-sectitle="${esc(sec.ref)}">${esc(sec.title)}</span>${st}` +
         `<span class="ol-hacts"><button data-secadd="${esc(sec.ref)}" title="New item">+</button>` +
         `<button data-sechist="${esc(sec.key || "")}" title="History of this ticket"${sec.key ? "" : " hidden"}>⟲</button>` +
@@ -892,6 +943,7 @@
         }
         if (l.onExpiry && n.check === " ") chips += `<span class="ol-chip else" title="If it passes">else: ${esc(l.onExpiry)}</span>`;
       }
+      if (n.check === "x" && n.done) chips += `<span class="ol-chip closed" title="Checked off ${esc(n.done)}">✓ ${esc(fmtDay(n.done, now))}</span>`;
       if (n.context.length) {
         const open = this.ctxOpen.has(n.id);
         chips += `<button class="ol-chip ctx${open ? " on" : ""}" data-ctx title="${open ? "Hide" : "Show"} the note (⇧↵ to edit)">¶${n.context.length > 1 ? " " + n.context.length : ""}</button>`;
@@ -902,7 +954,7 @@
       const text = this.focus && this.focus.id === n.id ? this.rawText(n.id) : d.text;
       return `<div class="${cls.join(" ")}" data-id="${esc(n.id)}" style="--d:${depth}">` +
         `<span class="ol-grip" draggable="true" title="Drag to move · click to select · double-click to focus · right-click for more">⋮⋮</span>` +
-        `<button class="ol-fold${hasKids ? "" : " none"}${folded ? " folded" : ""}" data-fold tabindex="-1" aria-label="Fold">▾</button>${box}` +
+        `<button class="ol-fold${hasKids ? "" : " none"}${folded ? " folded" : ""}" data-fold tabindex="-1" aria-label="Fold">${CHEVRON}</button>${box}` +
         `<div class="ol-main"><div class="ol-line"><div class="ol-text" contenteditable="plaintext-only" spellcheck="false" data-ph="${n.check === null ? "Note" : "To do"}">${esc(text)}</div>` +
         (chips ? `<span class="ol-chips">${chips}</span>` : "") + `</div>${ctx}${editing}</div>` +
         (this.menu === n.id ? this.menuHtml(n) : "") + `</div>`;
@@ -910,6 +962,11 @@
 
     menuHtml(n) {
       return `<div class="ol-menu" role="menu">` +
+        `<button data-mmove="in">Shift right: under the item above <kbd>Tab</kbd></button>` +
+        `<button data-mmove="out">Shift left: one level out <kbd>⇧Tab</kbd></button>` +
+        `<button data-mmove="up">Move up <kbd>⌥↑</kbd></button>` +
+        `<button data-mmove="down">Move down <kbd>⌥↓</kbd></button>` +
+        `<hr>` +
         (n.check === null ? `<button data-mk="task">Make it a task</button>` : `<button data-mk="note">Make it a note (no checkbox)</button>`) +
         `<button data-mctx>${n.context.length ? "Edit the note" : "Add a note"} <kbd>⇧↵</kbd></button>` +
         `<button data-mhoist>Focus on it <kbd>⌘]</kbd></button>` +
@@ -935,6 +992,7 @@
         if (t.textContent !== raw) {
           // The row showed the loop's short text; edit the full line with its fields.
           requestAnimationFrame(() => {
+            if (document.activeElement !== t) return; // left already (a drag across items)
             const off = caretOf(t);
             t.textContent = raw;
             setCaret(t, off === null ? raw.length : off);
@@ -1015,6 +1073,11 @@
       const id = row.dataset.id;
       if (t.closest(".ol-menu")) return this.onMenu(t, id);
       if (this.menu) { this.menu = null; this.render(); }
+      if (this.sel && !e.shiftKey && row.classList.contains("sel") && !t.closest("button, .ol-grip, .ol-chips")) {
+        this.sel = null;
+        this.paintSelection();
+        return this.focusRow(id, "end");
+      }
       if (t.closest("[data-check]")) { e.preventDefault(); return this.toggleCheck([id]); }
       if (t.closest("[data-fold]") || t.closest("[data-unfold]")) return this.toggleFold(id);
       if (t.closest("[data-bullet]")) return this.hoistTo(id);
@@ -1042,6 +1105,13 @@
 
     onMenu(t, id) {
       this.menu = null;
+      const mv = t.closest("[data-mmove]");
+      if (mv) {
+        const how = mv.dataset.mmove;
+        if (how === "in") return this.indent([id]);
+        if (how === "out") return this.outdent([id]);
+        return this.shift([id], how === "up" ? -1 : 1);
+      }
       if (t.closest("[data-mk]")) return this.setKind(id, t.closest("[data-mk]").dataset.mk === "task" ? " " : null);
       if (t.closest("[data-mctx]")) return this.editContext(id);
       if (t.closest("[data-mhoist]")) return this.hoistTo(id);
@@ -1195,6 +1265,13 @@
         return this.shift([id], e.key === "ArrowUp" ? -1 : 1);
       }
       if (mod && e.key === ".") { e.preventDefault(); return this.toggleFold(id); }
+      if (mod && !e.shiftKey && e.code === "KeyG") { e.preventDefault(); return this.group([id]); }
+      // ⌘A on a line already selected whole: select every item instead.
+      if (mod && e.key.toLowerCase() === "a" && text.length && range.start === 0 && range.end === text.length) {
+        e.preventDefault();
+        const ids = this.visibleIds();
+        return this.selectRows(ids[0], ids[ids.length - 1]);
+      }
       if (mod && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && node.children.length) {
         e.preventDefault();
         const fold = e.key === "ArrowUp";
@@ -1307,19 +1384,159 @@
     }
 
     paintSelection() {
-      this.body.querySelectorAll(".ol-row.sel").forEach((r) => r.classList.remove("sel"));
-      if (!this.sel) return;
+      this.body.querySelectorAll(".ol-row.sel").forEach((r) => { r.classList.remove("sel"); r.removeAttribute("draggable"); });
+      if (!this.sel) return this.paintTools();
       const ids = this.visibleIds();
       let a = ids.indexOf(this.sel.anchor);
       let b = ids.indexOf(this.sel.head);
-      if (a < 0 || b < 0) { this.sel = null; return; }
+      if (a < 0 || b < 0) { this.sel = null; return this.paintTools(); }
       if (a > b) [a, b] = [b, a];
       for (const id of ids.slice(a, b + 1)) {
         const r = this.body.querySelector(`.ol-row[data-id="${CSS.escape(id)}"]`);
-        if (r) r.classList.add("sel");
+        // Selected rows can be dragged by any point, not only by the grip.
+        if (r) { r.classList.add("sel"); r.setAttribute("draggable", "true"); }
       }
       const head = this.body.querySelector(`.ol-row[data-id="${CSS.escape(this.sel.head)}"]`);
       if (head) head.scrollIntoView({ block: "nearest" });
+      this.paintTools();
+    }
+
+    /** The bar over a selection: what can be done to the selected items, with their keys. */
+    paintTools() {
+      const el = this.root.querySelector(".ol-seltools");
+      if (!el) return;
+      const first = this.sel && this.body.querySelector(".ol-row.sel");
+      if (!first || this.snapshot) { el.hidden = true; return; }
+      const n = this.selectedIds().length;
+      const all = this.body.querySelectorAll(".ol-row.sel").length;
+      el.innerHTML = `<span class="ol-stn">${all} selected</span>` +
+        `<button data-st="out" title="Move one level out (Shift+Tab)">← Out</button>` +
+        `<button data-st="in" title="Make ${n === 1 ? "it a sub-item" : "them sub-items"} of the item above (Tab)">In →</button>` +
+        `<button data-st="up" title="Move up (⌥↑)">↑</button><button data-st="down" title="Move down (⌥↓)">↓</button>` +
+        `<button data-st="check" title="Check / uncheck (⌘↵)">✓</button>` +
+        `<button data-st="fold" title="Fold what is inside; items with nothing inside go under a new folded item (⌘.)">Collapse</button>` +
+        `<button data-st="group" title="Put under a new item (⌘G)">Group</button>` +
+        `<button data-st="del" class="del" title="Delete with what is under (⌫)">Delete</button>`;
+      el.hidden = false;
+      // Above the first selected row; below the last one when there is no room above.
+      const page = this.root.querySelector(".ol-page").getBoundingClientRect();
+      const scroll = this.root.querySelector(".ol-scroll").getBoundingClientRect();
+      const rows = this.body.querySelectorAll(".ol-row.sel");
+      const above = first.getBoundingClientRect().top - el.offsetHeight - 6;
+      const top = above >= scroll.top + 4 ? above : rows[rows.length - 1].getBoundingClientRect().bottom + 6;
+      el.style.top = `${top - page.top}px`;
+      el.style.right = `${Math.max(12, page.right - this.body.getBoundingClientRect().right + 24)}px`;
+    }
+
+    selTool(what) {
+      const sel = this.selectedIds();
+      if (!sel.length) return;
+      if (what === "out") this.outdent(sel);
+      else if (what === "in") this.indent(sel);
+      else if (what === "up") this.shift(sel, -1);
+      else if (what === "down") this.shift(sel, 1);
+      else if (what === "check") this.toggleCheck(sel);
+      else if (what === "fold") return this.collapse(sel);
+      else if (what === "group") return this.group(sel);
+      else if (what === "del") return this.remove(sel, this.neighbourFocus(sel[0]));
+      this.body.focus({ preventScroll: true });
+      this.paintSelection();
+    }
+
+    /** Folds the selected items; items with nothing inside go under a new item, folded ("under a cut"). */
+    collapse(ids) {
+      const withKids = ids.filter((id) => this.idx.get(id).node.children.length);
+      if (!withKids.length) return this.group(ids, { fold: true });
+      const fold = withKids.some((id) => !this.folded.has(id));
+      for (const id of withKids) if (fold) this.folded.add(id); else this.folded.delete(id);
+      write(FOLDED_KEY, [...this.folded]);
+      this.sel = { anchor: ids[0], head: ids[ids.length - 1] };
+      this.render();
+      this.body.focus({ preventScroll: true });
+    }
+
+    /** Puts the items under a new item at the place of the first one; the caret goes to its text. */
+    group(ids, opts = {}) {
+      this.flushDrafts();
+      const order = this.visibleIds();
+      ids = [...ids].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const gid = newId(this.taken());
+      const first = this.idx.get(ids[0]).node;
+      const ops = [{ op: "insert", place: this.placeOf(ids[0]), item: { id: gid, text: "", check: first.check === null ? null : " ", context: [] } }];
+      const inverse = [{ op: "delete", id: gid }];
+      this.localApply([ops[0]]);
+      ids.forEach((id, i) => {
+        const back = { op: "move", id, place: this.placeOf(id) };
+        const op = { op: "move", id, place: { parent: gid, index: i } };
+        ops.push(op);
+        inverse.unshift(back);
+        this.localApply([op]);
+      });
+      if (opts.fold) { this.folded.add(gid); write(FOLDED_KEY, [...this.folded]); }
+      this.undoStack.push({ ops, inverse });
+      this.redoStack = [];
+      this.sticky.add(gid);
+      for (const id of ids) this.sticky.add(id);
+      this.sel = null;
+      this.render({ id: gid, offset: 0 });
+      this.send(ops);
+      this.say("Type a title for the group");
+    }
+
+    // ---------- selecting with the mouse ----------
+
+    onPress(e) {
+      if (e.button !== 0 || this.snapshot) return;
+      const row = e.target.closest(".ol-row");
+      if (!row || row.classList.contains("ol-title")) return;
+      if (e.target.closest(".ol-grip, button, .ol-chips, .ol-menu, textarea, a, .ol-ctxt")) return;
+      const id = row.dataset.id;
+      // Shift-click: whole items from the one being edited (or the selection's start) to this one.
+      if (e.shiftKey) {
+        const from = this.sel ? this.sel.anchor : this.focus ? this.focus.id : null;
+        if (from && from !== id && this.visibleIds().includes(from)) { e.preventDefault(); this.selectRows(from, id); return; }
+      }
+      if (this.sel && row.classList.contains("sel")) return; // dragging the selected items
+      this.press = { id };
+    }
+
+    onPressMove(e) {
+      if (!this.press) return;
+      if (!(e.buttons & 1)) { this.onPressEnd(); return; }
+      const id = this.rowAtY(e.clientY);
+      if (!id || (!this.sel && id === this.press.id)) return; // inside one item the browser selects its text
+      e.preventDefault();
+      this.body.classList.add("selecting");
+      this.selectRows(this.press.id, id);
+      const sc = this.root.querySelector(".ol-scroll");
+      const box = sc.getBoundingClientRect();
+      if (e.clientY < box.top + 30) sc.scrollTop -= 14;
+      else if (e.clientY > box.bottom - 30) sc.scrollTop += 14;
+    }
+
+    onPressEnd() {
+      this.press = null;
+      this.body.classList.remove("selecting");
+    }
+
+    selectRows(from, to) {
+      if (!this.sel) {
+        this.flushDrafts();
+        const a = document.activeElement;
+        if (a && this.body.contains(a) && a !== this.body && a.blur) a.blur();
+        this.body.focus({ preventScroll: true });
+      }
+      const s = window.getSelection();
+      if (s) s.removeAllRanges();
+      this.sel = { anchor: from, head: to };
+      this.paintSelection();
+    }
+
+    /** The row under a height on the screen (the nearest one above or below the gaps). */
+    rowAtY(y) {
+      const rows = this.body.querySelectorAll(".ol-row:not(.ol-title)");
+      for (const r of rows) if (y < r.getBoundingClientRect().bottom) return r.dataset.id;
+      return rows.length ? rows[rows.length - 1].dataset.id : null;
     }
 
     onSelKey(e) {
@@ -1340,7 +1557,8 @@
       }
       if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); return this.remove(sel, this.neighbourFocus(sel[0])); }
       if (mod && e.key === "a") { e.preventDefault(); this.sel = { anchor: ids[0], head: ids[ids.length - 1] }; return this.paintSelection(); }
-      if (mod && e.key === ".") { e.preventDefault(); for (const id of sel) this.toggleFold(id); return; }
+      if (mod && e.key === ".") { e.preventDefault(); return this.collapse(sel); }
+      if (mod && !e.shiftKey && e.code === "KeyG") { e.preventDefault(); return this.group(sel); }
       if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); return e.shiftKey ? this.redo() : this.undo(); }
     }
 
@@ -1407,7 +1625,7 @@
     // ---------- drag and drop ----------
 
     onDragStart(e) {
-      const grip = e.target.closest && e.target.closest(".ol-grip");
+      const grip = e.target.closest && (e.target.closest(".ol-grip") || e.target.closest(".ol-row.sel"));
       if (!grip) return;
       const id = this.rowOf(grip);
       const ids = this.sel && this.selectedIds().includes(id) ? this.selectedIds() : [id];
@@ -1611,17 +1829,42 @@
     toggleKeys() {
       const el = this.root.querySelector(".ol-keys");
       if (!el.hidden) { el.hidden = true; return; }
-      const rows = [
-        ["↵", "new item (at the start: above; in the middle: split)"], ["⇧↵", "note under the item"], ["⌘↵", "check / uncheck"],
-        ["⇥ / ⇧⇥", "indent / outdent, with children"], ["⌥↑ ⌥↓", "move the branch"], ["⌘.", "fold / unfold"],
-        ["⌘] / ⌘[", "focus in / out"], ["Esc", "select rows; ⇧↑↓ to extend"], ["⌫ on empty", "delete the item"],
-        ["⌘Z / ⇧⌘Z", "undo / redo"], ["⌥H", "history"], ["[] + space", "note → task; “- ” + space: task → note"],
-        ["by …", "“· from Jim · by tomorrow” makes a loop"],
+      const groups = [
+        ["Writing", [
+          ["Enter", "a new item below. At the start of a line: a new one above; in the middle: splits the line"],
+          ["Shift + Enter", "a note under the item (context, links, quotes)"],
+          ["⌘ + Enter", "check / uncheck"],
+          ["[ ] then space", "at the start of a bullet: makes it a task; “- ” then space makes a task a bullet"],
+          ["· by tomorrow", "“wait for review · from Jim · by tomorrow” turns the item into a loop"],
+        ]],
+        ["Moving items", [
+          ["Tab", "shifts the item right: it becomes a sub-item of the one above. Its own sub-items come along"],
+          ["Shift + Tab", "shifts it back left, one level out"],
+          ["⌥ Option + ↑ / ↓", "moves the item, with everything under it, up or down"],
+          ["drag ⋮⋮", "the handle left of an item: drag to put it anywhere; drop to the right to nest it"],
+          ["right-click ⋮⋮", "the same as buttons: in / out, up / down, focus, history, delete"],
+        ]],
+        ["Several items", [
+          ["drag across", "press on an item and move the mouse over others: whole items get selected"],
+          ["Shift + click", "selects from the item being edited to the clicked one"],
+          ["Esc, Shift + ↑ / ↓", "select from the keyboard"],
+          ["then", "Tab / Shift + Tab, ⌥↑ / ⌥↓, ⌘ + Enter, Delete work on all of them, or use the bar above them"],
+          ["⌘ + .", "collapse: folds what is inside; items with nothing inside go under a new folded item"],
+          ["⌘ + G", "group: puts them under a new item and lets you type its title"],
+        ]],
+        ["Looking around", [
+          ["⌘ + .", "on one item: fold / unfold what is under it (or click the ▾ arrow)"],
+          ["⌘ + ] / ⌘ + [", "open the item as its own page / go back out (or click the bullet)"],
+          ["⌥ Option + H", "history: the item’s life, the ticket’s, the outline day by day"],
+          ["⌘ + Z / ⇧⌘ + Z", "undo / redo"],
+        ]],
       ];
-      el.innerHTML = `<div class="ol-keysbox"><h4>Keys</h4>${rows.map(([k, v]) => `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join("")}` +
+      el.innerHTML = `<div class="ol-keysbox"><h4>How to use the outline</h4>` +
+        groups.map(([title, rows]) => `<h5>${esc(title)}</h5>` + rows.map(([k, v]) => `<div><kbd>${esc(k)}</kbd><span>${esc(v)}</span></div>`).join("")).join("") +
         `<button class="btn ghost" data-kclose>Close</button></div>`;
       el.hidden = false;
       el.querySelector("[data-kclose]").addEventListener("click", () => { el.hidden = true; });
+      el.addEventListener("click", (e) => { if (e.target === el) el.hidden = true; });
     }
   }
 
@@ -1674,7 +1917,7 @@
   }
 
   function stripFields(text) {
-    return text.replace(/ · opened \d{4}-\d{2}-\d{2}( \d{1,2}:\d{2})?/, "");
+    return text.replace(/ · opened \d{4}-\d{2}-\d{2}( \d{1,2}:\d{2})?/, "").replace(DONE_RE, "");
   }
 
   /** Lines pasted as items: "- [ ] x", "* x", "1. x" or plain lines; indentation makes children; "> " lines are notes. */
